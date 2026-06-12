@@ -58,6 +58,7 @@ export default function App() {
   const [framing, setFraming] = useState<FramingStatus | null>(null);
   const [countdownS, setCountdownS] = useState<number | null>(null);
   const [outOfFrame, setOutOfFrame] = useState(false);
+  const [facing, setFacing] = useState<"user" | "environment">("user");
 
   const modeRef = useRef<Mode>("idle");
   useEffect(() => {
@@ -215,12 +216,12 @@ export default function App() {
     rafRef.current = requestAnimationFrame(tick);
   }, [finishSession]);
 
-  const startLive = useCallback(async () => {
+  const startLive = useCallback(async (face: "user" | "environment") => {
     setError(null);
     setMode("loading");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 } },
+        video: { facingMode: face, width: { ideal: 1280 } },
         audio: false,
       });
       streamRef.current = stream;
@@ -245,6 +246,15 @@ export default function App() {
       setMode("idle");
     }
   }, [runLoop, finishSession, stopLoop]);
+
+  // restarting the loop is the clean way to swap cameras: the media clock
+  // resets with a new stream, which the frame gate would otherwise block on
+  const flipCamera = useCallback(() => {
+    const next = facing === "user" ? "environment" : "user";
+    setFacing(next);
+    stopLoop();
+    startLive(next);
+  }, [facing, stopLoop, startLive]);
 
   const startUpload = useCallback(
     async (file: File) => {
@@ -287,7 +297,7 @@ export default function App() {
           <button
             className="big-btn"
             disabled={mode === "loading"}
-            onClick={startLive}
+            onClick={() => startLive(facing)}
           >
             ● FILM LIVE
           </button>
@@ -317,8 +327,22 @@ export default function App() {
 
       <main className={mode === "idle" || mode === "loading" ? "hidden" : ""}>
         <div className={`stage ${showAlertFrame ? "alert" : ""}`}>
-          <video ref={videoRef} playsInline muted />
-          <canvas ref={canvasRef} />
+          {/* front cam shows as a mirror; the overlay flips with it */}
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            className={mode !== "video" && facing === "user" ? "mirror" : ""}
+          />
+          <canvas
+            ref={canvasRef}
+            className={mode !== "video" && facing === "user" ? "mirror" : ""}
+          />
+          {mode === "setup" && (
+            <button className="flip-btn" onClick={flipCamera}>
+              ⇄ FLIP CAM
+            </button>
+          )}
           {mode === "setup" && (
             <div className={`stage-banner ${framing?.ok ? "ok" : ""}`}>
               {framing?.ok

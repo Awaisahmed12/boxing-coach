@@ -114,6 +114,26 @@ main {
   pointer-events: none;
 }
 
+.mirror {
+  transform: scaleX(-1);
+}
+
+.flip-btn {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  border: 1px solid #555;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
 .stage.alert {
   outline: 3px solid var(--bad);
   outline-offset: -3px;

@@ -6,7 +6,7 @@ import { assessFraming, type FramingStatus } from "./analysis/framing";
 import { getPoseLandmarker } from "./analysis/pose";
 import type { Critique, FrameMetrics, Point } from "./analysis/types";
 
-type Mode = "idle" | "loading" | "setup" | "live" | "video" | "done";
+type Mode = "idle" | "loading" | "setup" | "live" | "done";
 
 const READY_FRAMES = 60; // ~2s of stable framing before the round starts
 const OUT_OF_FRAME_FRAMES = 20; // ~0.7s grace — pivoting causes brief dips
@@ -49,7 +49,6 @@ export default function App() {
   const rafRef = useRef(0);
   const vfcRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
 
   const [mode, setMode] = useState<Mode>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -73,12 +72,9 @@ export default function App() {
       if (!video) return;
       const m = modeRef.current;
       if (document.visibilityState === "visible") {
-        if (m === "setup" || m === "live" || m === "video") {
+        if (m === "setup" || m === "live") {
           video.play().catch(() => {});
         }
-      } else if (m === "video") {
-        // uploaded footage would keep playing unanalyzed while hidden
-        video.pause();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -105,11 +101,11 @@ export default function App() {
     setMode("done");
   }, [stopLoop]);
 
-  const runLoop = useCallback(async (kind: "live" | "video") => {
+  const runLoop = useCallback(async () => {
     const landmarker = await getPoseLandmarker();
     let analyzer = new BoxingAnalyzer();
     analyzerRef.current = analyzer;
-    let sessionStarted = kind === "video"; // uploads have no setup phase
+    let sessionStarted = false;
     setCritiques([]);
     setFraming(null);
     setOutOfFrame(false);
@@ -151,30 +147,28 @@ export default function App() {
         return; // drop the frame — one bad detect must not kill the session
       }
 
-      if (kind === "live") {
-        const status = assessFraming(lm);
-        if (!sessionStarted) {
-          // setup phase: wait for stable full-body framing, then auto-start
-          readyFrames = status.ok ? readyFrames + 1 : 0;
-          setFraming(status);
-          setCountdownS(
-            status.ok
-              ? Math.max(1, Math.ceil((READY_FRAMES - readyFrames) / 30))
-              : null
-          );
-          if (readyFrames >= READY_FRAMES) {
-            sessionStarted = true;
-            analyzer = new BoxingAnalyzer(); // stats start clean at the bell
-            analyzerRef.current = analyzer;
-            setFraming(null);
-            setCountdownS(null);
-            setMode("live");
-            beep();
-          }
-        } else {
-          badFrames = status.ok ? 0 : badFrames + 1;
-          setOutOfFrame(badFrames >= OUT_OF_FRAME_FRAMES);
+      const status = assessFraming(lm);
+      if (!sessionStarted) {
+        // setup phase: wait for stable full-body framing, then auto-start
+        readyFrames = status.ok ? readyFrames + 1 : 0;
+        setFraming(status);
+        setCountdownS(
+          status.ok
+            ? Math.max(1, Math.ceil((READY_FRAMES - readyFrames) / 30))
+            : null
+        );
+        if (readyFrames >= READY_FRAMES) {
+          sessionStarted = true;
+          analyzer = new BoxingAnalyzer(); // stats start clean at the bell
+          analyzerRef.current = analyzer;
+          setFraming(null);
+          setCountdownS(null);
+          setMode("live");
+          beep();
         }
+      } else {
+        badFrames = status.ok ? 0 : badFrames + 1;
+        setOutOfFrame(badFrames >= OUT_OF_FRAME_FRAMES);
       }
 
       setMetrics(m);
@@ -244,10 +238,9 @@ export default function App() {
       });
       const video = videoRef.current!;
       video.srcObject = stream;
-      video.src = "";
       await video.play();
       setMode("setup");
-      await runLoop("live");
+      await runLoop();
     } catch (e) {
       stopLoop(); // release the camera if the pose model failed to load
       setError(
@@ -268,31 +261,8 @@ export default function App() {
     startLive(next);
   }, [facing, stopLoop, startLive]);
 
-  const startUpload = useCallback(
-    async (file: File) => {
-      setError(null);
-      setMode("loading");
-      try {
-        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-        const url = URL.createObjectURL(file);
-        objectUrlRef.current = url;
-        const video = videoRef.current!;
-        video.srcObject = null;
-        video.src = url;
-        await video.play();
-        setMode("video");
-        await runLoop("video");
-      } catch (e) {
-        setError(`Could not load video: ${e instanceof Error ? e.message : e}`);
-        setMode("idle");
-      }
-    },
-    [runLoop]
-  );
-
   const m = metrics;
   const speed = m ? Math.max(m.speedMph.left, m.speedMph.right) : 0;
-  const sessionActive = mode === "live" || mode === "video";
   const showAlertFrame = outOfFrame && mode === "live";
 
   return (
@@ -313,26 +283,13 @@ export default function App() {
           >
             ● FILM LIVE
           </button>
-          <label className="big-btn">
-            ▲ UPLOAD VIDEO
-            <input
-              type="file"
-              accept="video/*"
-              hidden
-              disabled={mode === "loading"}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) startUpload(f);
-              }}
-            />
-          </label>
           {mode === "loading" && <p className="hint">LOADING POSE MODEL…</p>}
           {error && <p className="error">{error}</p>}
           <p className="hint">
-            Film from the side or at a 45° angle. The round starts
-            automatically (with a beep) once your full body has been in frame
-            for a couple of seconds. All analysis runs on your device — no
-            video is uploaded anywhere.
+            Prop your phone up side-on or at a 45° angle to where you'll work.
+            The round starts automatically (with a beep) once your full body
+            has been in frame for a couple of seconds. All analysis runs on
+            your device — nothing is uploaded anywhere.
           </p>
         </div>
       ) : null}
@@ -344,11 +301,11 @@ export default function App() {
             ref={videoRef}
             playsInline
             muted
-            className={mode !== "video" && facing === "user" ? "mirror" : ""}
+            className={facing === "user" ? "mirror" : ""}
           />
           <canvas
             ref={canvasRef}
-            className={mode !== "video" && facing === "user" ? "mirror" : ""}
+            className={facing === "user" ? "mirror" : ""}
           />
           {mode === "setup" && (
             <button className="flip-btn" onClick={flipCamera}>
@@ -442,7 +399,7 @@ export default function App() {
         </div>
       </main>
 
-      {sessionActive && (
+      {mode === "live" && (
         <button className="stop-btn" onClick={finishSession}>
           ■ END SESSION &amp; GET FULL CRITIQUE
         </button>

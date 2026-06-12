@@ -1,7 +1,9 @@
+import { MovementTracker } from "./movement";
 import { LM } from "./pose";
 import type {
   FrameMetrics,
   Hand,
+  MoveEvent,
   Point,
   PunchEvent,
   PunchType,
@@ -134,6 +136,8 @@ export class BoxingAnalyzer {
   private punches: PunchEvent[] = [];
   private maxSpeedMph = 0;
   private lastPunch: PunchEvent | null = null;
+  private movement = new MovementTracker();
+  private lastMove: MoveEvent | null = null;
   private noseSamples: Point[] = [];
   private stanceRatios: number[] = [];
   private totalFrames = 0;
@@ -208,6 +212,8 @@ export class BoxingAnalyzer {
     if (dt > 0 && dt < 0.5) {
       this.trackHand("LEFT", lm, dt, t);
       this.trackHand("RIGHT", lm, dt, t);
+      const move = this.movement.update(lm, this.scaleFast, dt, t);
+      if (move) this.lastMove = move;
     }
 
     return this.frameMetrics(t, lm);
@@ -369,6 +375,7 @@ export class BoxingAnalyzer {
             };
             this.punches.push(punch);
             this.lastPunch = punch;
+            this.lastMove = { time: punch.time, type: punch.type, hand };
             this.maxSpeedMph = Math.max(this.maxSpeedMph, punch.speedMph);
             h.pendingPunch = punch;
             // measure retraction (and the next punch's refractory) from the
@@ -511,6 +518,8 @@ export class BoxingAnalyzer {
       guardUp: { left: L.guardUp, right: R.guardUp },
       punchCount: this.punches.length,
       lastPunch: this.lastPunch,
+      moveCounts: { ...this.movement.counts },
+      lastMove: this.lastMove,
     };
   }
 
@@ -558,6 +567,7 @@ export class BoxingAnalyzer {
       headMovement,
       stanceWidthRatio,
       maxSpeedMph: this.maxSpeedMph,
+      moveCounts: { ...this.movement.counts },
     };
   }
 

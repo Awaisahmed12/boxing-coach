@@ -8,6 +8,24 @@ export type Hand = "LEFT" | "RIGHT";
 
 export type PunchType = "STRAIGHT" | "HOOK" | "UPPERCUT";
 
+export type DefenseMove = "SLIP" | "DUCK" | "ROLL";
+export type FootworkMove = "PIVOT" | "STEP";
+export type MoveType = PunchType | DefenseMove | FootworkMove;
+
+export interface MoveEvent {
+  time: number; // seconds into session
+  type: MoveType;
+  hand?: Hand; // set for punches
+}
+
+export interface MoveCounts {
+  slips: number;
+  ducks: number;
+  rolls: number;
+  pivots: number;
+  steps: number;
+}
+
 export interface PunchEvent {
   time: number; // seconds into session
   hand: Hand;
@@ -30,6 +48,8 @@ export interface FrameMetrics {
   guardUp: { left: boolean; right: boolean };
   punchCount: number;
   lastPunch: PunchEvent | null;
+  moveCounts: MoveCounts;
+  lastMove: MoveEvent | null;
 }
 
 export interface SessionStats {
@@ -39,6 +59,7 @@ export interface SessionStats {
   headMovement: number; // avg normalized std-dev of nose position
   stanceWidthRatio: number; // ankle spread / shoulder width (median)
   maxSpeedMph: number;
+  moveCounts: MoveCounts;
 }
 
 export type Severity = "good" | "warn" | "bad";

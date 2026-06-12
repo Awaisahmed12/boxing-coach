@@ -122,8 +122,48 @@ export function buildCritiques(stats: SessionStats): Critique[] {
     }
   }
 
-  // --- Movement ---
-  if (durationS > 20 && stats.headMovement < 0.012) {
+  // --- Defense & movement ---
+  const mc = stats.moveCounts;
+  const defense = mc.slips + mc.ducks + mc.rolls;
+  if (durationS > 20 && punches.length >= 10) {
+    if (defense === 0) {
+      out.push({
+        severity: "bad",
+        title: "All offense, no defense",
+        detail: `${punches.length} punches without a single slip, duck or roll. Work a defensive move after every combination — punch and don't be there.`,
+      });
+    } else if (defense < punches.length / 6) {
+      out.push({
+        severity: "warn",
+        title: "Defense lags your offense",
+        detail: `${defense} defensive moves against ${punches.length} punches. Build the habit: combo, then slip or change levels before you reset.`,
+      });
+    } else {
+      out.push({
+        severity: "good",
+        title: "Defense woven in",
+        detail: `${mc.slips} slips, ${mc.ducks} ducks and ${mc.rolls} rolls alongside ${punches.length} punches — offense and defense are connected.`,
+      });
+    }
+  }
+  if (durationS > 30) {
+    const stepsPerMin = mc.steps / minutes;
+    if (mc.pivots === 0 && stepsPerMin < 4) {
+      out.push({
+        severity: "warn",
+        title: "Stuck in the mud",
+        detail:
+          "Barely any steps and no pivots detected. Move your feet — step off at an angle or pivot out after you punch instead of standing in range.",
+      });
+    } else if (mc.pivots >= 2 && stepsPerMin >= 6) {
+      out.push({
+        severity: "good",
+        title: "Active feet",
+        detail: `${mc.steps} steps and ${mc.pivots} pivots — you're moving, not posing. Keep changing angles.`,
+      });
+    }
+  }
+  if (durationS > 20 && stats.headMovement < 0.012 && defense === 0) {
     out.push({
       severity: "warn",
       title: "Static head",

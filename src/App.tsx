@@ -354,6 +354,27 @@ export default function App() {
           </section>
 
           <section className="card">
+            <h2>MOVEMENT</h2>
+            <div className="big">
+              {m
+                ? m.moveCounts.slips +
+                  m.moveCounts.ducks +
+                  m.moveCounts.rolls +
+                  m.moveCounts.pivots +
+                  m.moveCounts.steps
+                : 0}
+            </div>
+            <div className="sub">
+              SLIP {m?.moveCounts.slips ?? 0} · DUCK {m?.moveCounts.ducks ?? 0} ·
+              ROLL {m?.moveCounts.rolls ?? 0}
+              <br />
+              PIVOT {m?.moveCounts.pivots ?? 0} · STEP {m?.moveCounts.steps ?? 0}
+              <br />
+              LAST: {m?.lastMove ? m.lastMove.type : "—"}
+            </div>
+          </section>
+
+          <section className="card">
             <h2>GUARD</h2>
             <div className={`big ${m && m.guardUp.left && m.guardUp.right ? "ok" : "alert"}`}>
               {m && m.guardUp.left && m.guardUp.right

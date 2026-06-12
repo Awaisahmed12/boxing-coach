@@ -7,11 +7,19 @@ import type { Critique, FrameMetrics } from "./analysis/types";
 
 type Mode = "idle" | "loading" | "live" | "video" | "done";
 
+type FrameCallback = (now: number, meta: { mediaTime: number }) => void;
+interface VideoFrameCallbacks {
+  requestVideoFrameCallback?: (cb: FrameCallback) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+}
+const vfcOf = (v: HTMLVideoElement) => v as HTMLVideoElement & VideoFrameCallbacks;
+
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const analyzerRef = useRef<BoxingAnalyzer | null>(null);
   const rafRef = useRef(0);
+  const vfcRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
   const objectUrlRef = useRef<string | null>(null);
 
@@ -22,6 +30,11 @@ export default function App() {
 
   const stopLoop = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
+    const video = videoRef.current;
+    if (video && vfcRef.current) {
+      vfcOf(video).cancelVideoFrameCallback?.(vfcRef.current);
+      vfcRef.current = 0;
+    }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
   }, []);
@@ -40,42 +53,76 @@ export default function App() {
     const analyzer = new BoxingAnalyzer();
     analyzerRef.current = analyzer;
     setCritiques([]);
-    let lastTs = -1;
+    let lastMediaT = -1;
     let lastCritiqueT = 0;
+
+    const processFrame = (mediaT: number) => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState < 2) return;
+      if (mediaT <= lastMediaT) return;
+      lastMediaT = mediaT;
+
+      let m;
+      try {
+        const result = landmarker.detectForVideo(video, performance.now());
+        const lm = result.landmarks[0] ?? null;
+        const aspect =
+          video.videoWidth > 0 && video.videoHeight > 0
+            ? video.videoWidth / video.videoHeight
+            : 1;
+        m = analyzer.update(lm, mediaT, aspect);
+      } catch {
+        return; // drop the frame — one bad detect must not kill the session
+      }
+      setMetrics(m);
+
+      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
+        canvas.width = video.clientWidth;
+        canvas.height = video.clientHeight;
+      }
+      const ctx = canvas.getContext("2d");
+      if (ctx) drawOverlay(ctx, m, canvas.width, canvas.height);
+
+      // refresh live coaching every 5s once there's enough data
+      if (m.time - lastCritiqueT > 5 && analyzer.hasData()) {
+        lastCritiqueT = m.time;
+        setCritiques(buildCritiques(analyzer.stats()));
+      }
+    };
+
+    // requestVideoFrameCallback fires exactly once per presented frame with
+    // its true media timestamp; rAF fires at display rate, where currentTime
+    // is a continuous clock — re-detecting duplicate frames there produces
+    // pure-jitter velocities, so the fallback gates on a plausible frame gap
+    const useVfc =
+      !!videoRef.current &&
+      typeof vfcOf(videoRef.current).requestVideoFrameCallback === "function";
+
+    const pumpVfc = () => {
+      const video = videoRef.current;
+      if (!video || video.ended) return;
+      // re-register before processing so a throw can't kill the chain
+      vfcRef.current = vfcOf(video).requestVideoFrameCallback!((_now, meta) => {
+        pumpVfc();
+        processFrame(meta.mediaTime);
+      });
+    };
 
     const tick = () => {
       const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas) return;
-      if (video.readyState >= 2 && !video.paused && !video.ended) {
-        const ts = performance.now();
-        if (ts > lastTs) {
-          lastTs = ts;
-          const result = landmarker.detectForVideo(video, ts);
-          const lm = result.landmarks[0] ?? null;
-          const m = analyzer.update(lm, ts / 1000);
-          setMetrics(m);
-
-          if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-            canvas.width = video.clientWidth;
-            canvas.height = video.clientHeight;
-          }
-          const ctx = canvas.getContext("2d");
-          if (ctx) drawOverlay(ctx, m, canvas.width, canvas.height);
-
-          // refresh live coaching every 5s once there's enough data
-          if (m.time - lastCritiqueT > 5 && analyzer.hasData()) {
-            lastCritiqueT = m.time;
-            setCritiques(buildCritiques(analyzer.stats()));
-          }
-        }
-      }
-      if (videoRef.current?.ended) {
+      if (!video) return;
+      if (video.ended) {
         finishSession();
         return;
       }
       rafRef.current = requestAnimationFrame(tick);
+      if (!useVfc && !video.paused && video.currentTime - lastMediaT >= 0.02) {
+        processFrame(video.currentTime);
+      }
     };
+
+    if (useVfc) pumpVfc();
     rafRef.current = requestAnimationFrame(tick);
   }, [finishSession]);
 
@@ -88,6 +135,11 @@ export default function App() {
         audio: false,
       });
       streamRef.current = stream;
+      // unplugged/revoked camera never sets video.ended — end the session
+      // instead of spinning on a frozen frame
+      stream.getVideoTracks()[0]?.addEventListener("ended", finishSession, {
+        once: true,
+      });
       const video = videoRef.current!;
       video.srcObject = stream;
       video.src = "";
@@ -95,6 +147,7 @@ export default function App() {
       setMode("live");
       await runLoop();
     } catch (e) {
+      stopLoop(); // release the camera if the pose model failed to load
       setError(
         e instanceof Error && e.name === "NotAllowedError"
           ? "Camera access was denied. Allow camera permission and try again."
@@ -102,7 +155,7 @@ export default function App() {
       );
       setMode("idle");
     }
-  }, [runLoop]);
+  }, [runLoop, finishSession, stopLoop]);
 
   const startUpload = useCallback(
     async (file: File) => {

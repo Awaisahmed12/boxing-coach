@@ -1,6 +1,7 @@
 export interface Point {
   x: number;
   y: number;
+  visibility?: number; // MediaPipe per-landmark confidence, 0..1
 }
 
 export type Hand = "LEFT" | "RIGHT";

@@ -114,6 +114,31 @@ main {
   pointer-events: none;
 }
 
+.stage.alert {
+  outline: 3px solid var(--bad);
+  outline-offset: -3px;
+}
+
+.stage-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 92%;
+  padding: 10px 16px;
+  background: rgba(200, 16, 46, 0.88);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.stage-banner.ok {
+  background: rgba(31, 138, 59, 0.88);
+}
+
 .frame-tag {
   position: absolute;
   bottom: 8px;

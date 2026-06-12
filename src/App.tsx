@@ -2,10 +2,38 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BoxingAnalyzer } from "./analysis/boxingAnalyzer";
 import { buildCritiques } from "./analysis/critique";
 import { drawOverlay } from "./analysis/draw";
+import { assessFraming, type FramingStatus } from "./analysis/framing";
 import { getPoseLandmarker } from "./analysis/pose";
-import type { Critique, FrameMetrics } from "./analysis/types";
+import type { Critique, FrameMetrics, Point } from "./analysis/types";
 
-type Mode = "idle" | "loading" | "live" | "video" | "done";
+type Mode = "idle" | "loading" | "setup" | "live" | "video" | "done";
+
+const READY_FRAMES = 60; // ~2s of stable framing before the round starts
+const OUT_OF_FRAME_FRAMES = 12; // ~0.4s grace before the red warning
+
+// audible cue so the round start is clear even when the phone is propped up
+// with the rear camera and the screen can't be seen
+function beep() {
+  try {
+    const Ctor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctor) return;
+    const ctx = new Ctor();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.value = 0.12;
+    osc.start();
+    osc.stop(ctx.currentTime + 0.18);
+    osc.onended = () => void ctx.close();
+  } catch {
+    // sound is a nicety, never an error
+  }
+}
 
 type FrameCallback = (now: number, meta: { mediaTime: number }) => void;
 interface VideoFrameCallbacks {
@@ -27,6 +55,34 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<FrameMetrics | null>(null);
   const [critiques, setCritiques] = useState<Critique[]>([]);
+  const [framing, setFraming] = useState<FramingStatus | null>(null);
+  const [countdownS, setCountdownS] = useState<number | null>(null);
+  const [outOfFrame, setOutOfFrame] = useState(false);
+
+  const modeRef = useRef<Mode>("idle");
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  // background tabs pause media playback and animation frames; without this
+  // the stage comes back frozen/black after a tab switch
+  useEffect(() => {
+    const onVisibility = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      const m = modeRef.current;
+      if (document.visibilityState === "visible") {
+        if (m === "setup" || m === "live" || m === "video") {
+          video.play().catch(() => {});
+        }
+      } else if (m === "video") {
+        // uploaded footage would keep playing unanalyzed while hidden
+        video.pause();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   const stopLoop = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -48,13 +104,18 @@ export default function App() {
     setMode("done");
   }, [stopLoop]);
 
-  const runLoop = useCallback(async () => {
+  const runLoop = useCallback(async (kind: "live" | "video") => {
     const landmarker = await getPoseLandmarker();
-    const analyzer = new BoxingAnalyzer();
+    let analyzer = new BoxingAnalyzer();
     analyzerRef.current = analyzer;
+    let sessionStarted = kind === "video"; // uploads have no setup phase
     setCritiques([]);
+    setFraming(null);
+    setOutOfFrame(false);
     let lastMediaT = -1;
     let lastCritiqueT = 0;
+    let readyFrames = 0;
+    let badFrames = 0;
 
     const processFrame = (mediaT: number) => {
       const video = videoRef.current;
@@ -64,9 +125,10 @@ export default function App() {
       lastMediaT = mediaT;
 
       let m;
+      let lm: Point[] | null = null;
       try {
         const result = landmarker.detectForVideo(video, performance.now());
-        const lm = result.landmarks[0] ?? null;
+        lm = result.landmarks[0] ?? null;
         const aspect =
           video.videoWidth > 0 && video.videoHeight > 0
             ? video.videoWidth / video.videoHeight
@@ -75,6 +137,33 @@ export default function App() {
       } catch {
         return; // drop the frame — one bad detect must not kill the session
       }
+
+      if (kind === "live") {
+        const status = assessFraming(lm);
+        if (!sessionStarted) {
+          // setup phase: wait for stable full-body framing, then auto-start
+          readyFrames = status.ok ? readyFrames + 1 : 0;
+          setFraming(status);
+          setCountdownS(
+            status.ok
+              ? Math.max(1, Math.ceil((READY_FRAMES - readyFrames) / 30))
+              : null
+          );
+          if (readyFrames >= READY_FRAMES) {
+            sessionStarted = true;
+            analyzer = new BoxingAnalyzer(); // stats start clean at the bell
+            analyzerRef.current = analyzer;
+            setFraming(null);
+            setCountdownS(null);
+            setMode("live");
+            beep();
+          }
+        } else {
+          badFrames = status.ok ? 0 : badFrames + 1;
+          setOutOfFrame(badFrames >= OUT_OF_FRAME_FRAMES);
+        }
+      }
+
       setMetrics(m);
 
       if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
@@ -85,7 +174,7 @@ export default function App() {
       if (ctx) drawOverlay(ctx, m, canvas.width, canvas.height);
 
       // refresh live coaching every 5s once there's enough data
-      if (m.time - lastCritiqueT > 5 && analyzer.hasData()) {
+      if (sessionStarted && m.time - lastCritiqueT > 5 && analyzer.hasData()) {
         lastCritiqueT = m.time;
         setCritiques(buildCritiques(analyzer.stats()));
       }
@@ -144,8 +233,8 @@ export default function App() {
       video.srcObject = stream;
       video.src = "";
       await video.play();
-      setMode("live");
-      await runLoop();
+      setMode("setup");
+      await runLoop("live");
     } catch (e) {
       stopLoop(); // release the camera if the pose model failed to load
       setError(
@@ -170,7 +259,7 @@ export default function App() {
         video.src = url;
         await video.play();
         setMode("video");
-        await runLoop();
+        await runLoop("video");
       } catch (e) {
         setError(`Could not load video: ${e instanceof Error ? e.message : e}`);
         setMode("idle");
@@ -182,6 +271,7 @@ export default function App() {
   const m = metrics;
   const speed = m ? Math.max(m.speedMph.left, m.speedMph.right) : 0;
   const sessionActive = mode === "live" || mode === "video";
+  const showAlertFrame = outOfFrame && mode === "live";
 
   return (
     <div className="app">
@@ -217,17 +307,29 @@ export default function App() {
           {mode === "loading" && <p className="hint">LOADING POSE MODEL…</p>}
           {error && <p className="error">{error}</p>}
           <p className="hint">
-            Film from the side or at a 45° angle with your full body in frame.
-            All analysis runs on your device — no video is uploaded anywhere.
+            Film from the side or at a 45° angle. The round starts
+            automatically (with a beep) once your full body has been in frame
+            for a couple of seconds. All analysis runs on your device — no
+            video is uploaded anywhere.
           </p>
         </div>
       ) : null}
 
       <main className={mode === "idle" || mode === "loading" ? "hidden" : ""}>
-        <div className="stage">
+        <div className={`stage ${showAlertFrame ? "alert" : ""}`}>
           <video ref={videoRef} playsInline muted />
           <canvas ref={canvasRef} />
-          {m && (
+          {mode === "setup" && (
+            <div className={`stage-banner ${framing?.ok ? "ok" : ""}`}>
+              {framing?.ok
+                ? `✓ IN FRAME — STARTING IN ${countdownS ?? 2}`
+                : (framing?.message ?? "STEP INTO VIEW")}
+            </div>
+          )}
+          {showAlertFrame && (
+            <div className="stage-banner">OUT OF FRAME — STEP BACK INTO VIEW</div>
+          )}
+          {m && mode !== "setup" && (
             <div className="frame-tag">
               T+{m.time.toFixed(1)}S{" "}
               {m.landmarks ? "TRACKING" : "NO BOXER DETECTED"}
@@ -235,7 +337,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="panels">
+        <div className={`panels ${mode === "setup" ? "hidden" : ""}`}>
           <section className="card">
             <h2>HAND SPEED</h2>
             <div className="big">{speed.toFixed(0)} MPH</div>
@@ -307,6 +409,11 @@ export default function App() {
       {sessionActive && (
         <button className="stop-btn" onClick={finishSession}>
           ■ END SESSION &amp; GET FULL CRITIQUE
+        </button>
+      )}
+      {mode === "setup" && (
+        <button className="stop-btn" onClick={() => window.location.reload()}>
+          ✕ CANCEL
         </button>
       )}
 

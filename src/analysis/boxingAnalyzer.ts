@@ -67,6 +67,7 @@ interface HandTracker {
   stepBuf: number[]; // last few relative steps, to seed pathLen at punch entry
   chinHist: number[]; // recent wrist-to-nose distances, for punch direction
   peakSpeed: number;
+  peakInstSpeed: number; // peak un-smoothed wrist speed during the punch
   peakRelSpeed: number;
   peakElbowAngle: number;
   peakExtension: number;
@@ -99,6 +100,7 @@ function newHandTracker(): HandTracker {
     stepBuf: [],
     chinHist: [],
     peakSpeed: 0,
+    peakInstSpeed: 0,
     peakRelSpeed: 0,
     peakElbowAngle: 0,
     peakExtension: 0,
@@ -269,10 +271,14 @@ export class BoxingAnalyzer {
     const deadband = JITTER_DEADBAND_N * this.scaleSm;
     const rel = { x: wrist.x - shoulder.x, y: wrist.y - shoulder.y };
     let relStepM = 0;
+    let absInstSpeed = 0;
     if (h.prevPos && h.prevRel) {
       const absInst =
         Math.max(0, dist(wrist, h.prevPos) * this.scaleSm - deadband) / dt;
-      if (absInst < SPEED_GLITCH_MS) h.speedMs = 0.5 * absInst + 0.5 * h.speedMs;
+      if (absInst < SPEED_GLITCH_MS) {
+        h.speedMs = 0.5 * absInst + 0.5 * h.speedMs;
+        absInstSpeed = absInst;
+      }
       relStepM = Math.max(0, dist(rel, h.prevRel) * this.scaleSm - deadband);
       const relInst = relStepM / dt;
       if (relInst < SPEED_GLITCH_MS) {
@@ -330,6 +336,7 @@ export class BoxingAnalyzer {
       }
       case "EXTENDING": {
         h.peakSpeed = Math.max(h.peakSpeed, h.speedMs);
+        h.peakInstSpeed = Math.max(h.peakInstSpeed, absInstSpeed);
         h.peakRelSpeed = Math.max(h.peakRelSpeed, h.relSpeedMs);
         h.peakElbowAngle = Math.max(h.peakElbowAngle, elbowAngle);
         if (extension > h.peakExtension) {
@@ -353,7 +360,9 @@ export class BoxingAnalyzer {
               time: h.peakExtT,
               hand,
               type: this.classify(hand, lm, h.peakElbowAngle),
-              speedMph: h.peakSpeed * MS_TO_MPH,
+              // the double-EMA peak underestimates a snap by ~40%; the
+              // glitch-capped instantaneous peak is closer to true hand speed
+              speedMph: Math.max(h.peakSpeed, h.peakInstSpeed) * MS_TO_MPH,
               peakElbowAngle: h.peakElbowAngle,
               extensionM: h.peakExtension,
               retractionMs: null,
@@ -408,6 +417,7 @@ export class BoxingAnalyzer {
     const base = h.extendStreak > 0 ? h.streakBaseExt : extension;
     h.punchBaseExt = Math.max(base, extension - 0.3); // cap stale streak bases
     h.peakSpeed = h.speedMs;
+    h.peakInstSpeed = 0;
     h.peakRelSpeed = h.relSpeedMs;
     h.peakElbowAngle = elbowAngle;
     h.peakExtension = extension;

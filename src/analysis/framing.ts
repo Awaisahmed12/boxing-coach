@@ -6,31 +6,40 @@ export interface FramingStatus {
   message: string;
 }
 
-// core joints must be confidently tracked; wrists/elbows are excluded so a
-// bladed stance or a glove near the face doesn't flap the readiness state
-const CORE = [LM.NOSE, LM.L_SHOULDER, LM.R_SHOULDER, LM.L_HIP, LM.R_HIP];
-const LEGS = [LM.L_KNEE, LM.R_KNEE, LM.L_ANKLE, LM.R_ANKLE];
 const MIN_VIS = 0.5;
 const EDGE = 0.025; // normalized margin to the frame border
 const MIN_TORSO = 0.12; // smaller than this and the pose model gets unreliable
+
+// Orientation-agnostic on purpose: a boxer working a bag is side-on, back
+// turned, pivoting, constantly rotating — so never require the face or any
+// particular side to be visible. One trackable shoulder + hip proves the
+// torso; one knee + ankle proves full height.
+const TORSO = [LM.L_SHOULDER, LM.R_SHOULDER, LM.L_HIP, LM.R_HIP];
+const LEGS = [LM.L_KNEE, LM.R_KNEE, LM.L_ANKLE, LM.R_ANKLE];
 
 /** Judge whether the boxer is fully and usefully in frame. Raw landmarks. */
 export function assessFraming(lm: Point[] | null): FramingStatus {
   if (!lm || lm.length < 33) {
     return { ok: false, message: "STEP INTO VIEW" };
   }
-  const visible = (i: number) => (lm[i].visibility ?? 1) >= MIN_VIS;
-  if (!CORE.every(visible)) {
-    return { ok: false, message: "FACE THE CAMERA" };
+  const vis = (i: number) => (lm[i].visibility ?? 1) >= MIN_VIS;
+  const shoulderSeen = vis(LM.L_SHOULDER) || vis(LM.R_SHOULDER);
+  const hipSeen = vis(LM.L_HIP) || vis(LM.R_HIP);
+  if (!shoulderSeen || !hipSeen) {
+    return { ok: false, message: "CAN'T SEE YOU CLEARLY — CHECK LIGHT & DISTANCE" };
   }
-  if (!LEGS.every(visible)) {
-    return { ok: false, message: "STEP BACK — FEET MUST BE IN VIEW" };
+  const kneeSeen = vis(LM.L_KNEE) || vis(LM.R_KNEE);
+  const ankleSeen = vis(LM.L_ANKLE) || vis(LM.R_ANKLE);
+  if (!kneeSeen || !ankleSeen) {
+    return { ok: false, message: "STEP BACK — FULL BODY IN VIEW" };
   }
-  const pts = [...CORE, ...LEGS].map((i) => lm[i]);
-  if (pts.some((p) => p.y < EDGE || p.y > 1 - EDGE)) {
+  // bounds are judged only on confidently-seen joints; estimated positions
+  // of occluded ones can be garbage
+  const seen = [...TORSO, ...LEGS].filter(vis).map((i) => lm[i]);
+  if (seen.some((p) => p.y < EDGE || p.y > 1 - EDGE)) {
     return { ok: false, message: "STEP BACK — YOU'RE CUT OFF" };
   }
-  if (pts.some((p) => p.x < EDGE || p.x > 1 - EDGE)) {
+  if (seen.some((p) => p.x < EDGE || p.x > 1 - EDGE)) {
     return { ok: false, message: "MOVE TO THE CENTER" };
   }
   const torso = Math.hypot(

@@ -163,6 +163,11 @@ main {
   }
 }
 
+/* the .panels display rules above outrank the generic .hidden helper */
+.panels.hidden {
+  display: none;
+}
+
 .card {
   background: var(--card);
   color: #111;

@@ -9,7 +9,7 @@ import type { Critique, FrameMetrics, Point } from "./analysis/types";
 type Mode = "idle" | "loading" | "setup" | "live" | "video" | "done";
 
 const READY_FRAMES = 60; // ~2s of stable framing before the round starts
-const OUT_OF_FRAME_FRAMES = 12; // ~0.4s grace before the red warning
+const OUT_OF_FRAME_FRAMES = 20; // ~0.7s grace — pivoting causes brief dips
 
 // audible cue so the round start is clear even when the phone is propped up
 // with the rear camera and the screen can't be seen

@@ -25,12 +25,14 @@ export function assessFraming(lm: Point[] | null): FramingStatus {
   const vis = (i: number) => (lm[i].visibility ?? 1) >= MIN_VIS;
   const shoulderSeen = vis(LM.L_SHOULDER) || vis(LM.R_SHOULDER);
   const hipSeen = vis(LM.L_HIP) || vis(LM.R_HIP);
-  if (!shoulderSeen || !hipSeen) {
+  if (!shoulderSeen && !hipSeen) {
     return { ok: false, message: "CAN'T SEE YOU CLEARLY — CHECK LIGHT & DISTANCE" };
   }
+  // upper body tracked but anything below it isn't: almost always means the
+  // camera is too close and the body is cropped, not a visibility problem
   const kneeSeen = vis(LM.L_KNEE) || vis(LM.R_KNEE);
   const ankleSeen = vis(LM.L_ANKLE) || vis(LM.R_ANKLE);
-  if (!kneeSeen || !ankleSeen) {
+  if (!hipSeen || !kneeSeen || !ankleSeen) {
     return { ok: false, message: "STEP BACK — FULL BODY IN VIEW" };
   }
   // bounds are judged only on confidently-seen joints; estimated positions

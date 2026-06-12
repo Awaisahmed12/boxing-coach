@@ -118,23 +118,35 @@ export default function App() {
     let readyFrames = 0;
     let badFrames = 0;
 
+    // iOS Safari can hand WebGL the camera frame in sensor orientation while
+    // displaying it rotated — landmarks then land 90° off from what the user
+    // sees. Drawing through a 2D canvas always yields the displayed
+    // orientation, so detection runs on exactly what's on screen.
+    const work = document.createElement("canvas");
+    const workCtx = work.getContext("2d");
+
     const processFrame = (mediaT: number) => {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < 2) return;
+      if (!video || !canvas || !workCtx || video.readyState < 2) return;
       if (mediaT <= lastMediaT) return;
       lastMediaT = mediaT;
+
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      if (!vw || !vh) return;
 
       let m;
       let lm: Point[] | null = null;
       try {
-        const result = landmarker.detectForVideo(video, performance.now());
+        if (work.width !== vw || work.height !== vh) {
+          work.width = vw;
+          work.height = vh;
+        }
+        workCtx.drawImage(video, 0, 0, vw, vh);
+        const result = landmarker.detectForVideo(work, performance.now());
         lm = result.landmarks[0] ?? null;
-        const aspect =
-          video.videoWidth > 0 && video.videoHeight > 0
-            ? video.videoWidth / video.videoHeight
-            : 1;
-        m = analyzer.update(lm, mediaT, aspect);
+        m = analyzer.update(lm, mediaT, vw / vh);
       } catch {
         return; // drop the frame — one bad detect must not kill the session
       }

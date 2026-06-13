@@ -116,17 +116,10 @@ export default function App() {
     let readyFrames = 0;
     let badFrames = 0;
 
-    // iOS Safari can hand WebGL the camera frame in sensor orientation while
-    // displaying it rotated — landmarks then land 90° off from what the user
-    // sees. Drawing through a 2D canvas always yields the displayed
-    // orientation, so detection runs on exactly what's on screen.
-    const work = document.createElement("canvas");
-    const workCtx = work.getContext("2d");
-
     const processFrame = (mediaT: number) => {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      if (!video || !canvas || !workCtx || video.readyState < 2) return;
+      if (!video || !canvas || video.readyState < 2) return;
       if (mediaT <= lastMediaT) return;
       lastMediaT = mediaT;
 
@@ -137,12 +130,9 @@ export default function App() {
       let m;
       let lm: Point[] | null = null;
       try {
-        if (work.width !== vw || work.height !== vh) {
-          work.width = vw;
-          work.height = vh;
-        }
-        workCtx.drawImage(video, 0, 0, vw, vh);
-        const result = landmarker.detectForVideo(work, performance.now());
+        // feed the video element directly — MediaPipe applies the element's
+        // display orientation, which a hand-rolled canvas copy does not
+        const result = landmarker.detectForVideo(video, performance.now());
         // lock onto the boxer so a passerby can't hijack the tracking
         lm = subject.pick(result.landmarks);
         m = analyzer.update(lm, mediaT, vw / vh);

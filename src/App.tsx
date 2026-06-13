@@ -317,6 +317,9 @@ export default function App() {
               {framing?.ok
                 ? `✓ IN FRAME — STARTING IN ${countdownS ?? 2}`
                 : (framing?.message ?? "STEP INTO VIEW")}
+              {framing?.ok && framing.advice && (
+                <span className="banner-tip">{framing.advice}</span>
+              )}
             </div>
           )}
           {showAlertFrame && (

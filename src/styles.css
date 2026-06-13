@@ -159,6 +159,15 @@ main {
   background: rgba(31, 138, 59, 0.88);
 }
 
+.banner-tip {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+}
+
 .frame-tag {
   position: absolute;
   bottom: 8px;

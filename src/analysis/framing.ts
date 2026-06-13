@@ -4,6 +4,7 @@ import type { Point } from "./types";
 export interface FramingStatus {
   ok: boolean;
   message: string;
+  advice?: string; // non-blocking suggestion; never affects `ok`
 }
 
 const MIN_VIS = 0.5;
@@ -52,5 +53,13 @@ export function assessFraming(lm: Point[] | null): FramingStatus {
     return { ok: false, message: "MOVE TO THE CENTER" };
   }
 
-  return { ok: true, message: "IN FRAME" };
+  // Good to go. Legs are never required — but if they're visible we can also
+  // analyze footwork, so nudge (never block) when they aren't.
+  const legSeen =
+    vis(LM.L_KNEE) || vis(LM.R_KNEE) || vis(LM.L_ANKLE) || vis(LM.R_ANKLE);
+  return {
+    ok: true,
+    message: "IN FRAME",
+    advice: legSeen ? undefined : "Step back to also track footwork (optional)",
+  };
 }

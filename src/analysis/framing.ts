@@ -11,19 +11,8 @@ const EDGE = 0.02; // normalized margin to the frame border
 const MIN_TORSO = 0.1; // smaller than this and the pose model gets unreliable
 
 // All tracking (punches, guard, speed) needs only the upper body, so framing
-// only checks that: head, both shoulders, both hips, and the arms. Legs are
-// never required — feet drift out of frame constantly and don't matter.
-const UPPER = [
-  LM.NOSE,
-  LM.L_SHOULDER,
-  LM.R_SHOULDER,
-  LM.L_ELBOW,
-  LM.R_ELBOW,
-  LM.L_WRIST,
-  LM.R_WRIST,
-  LM.L_HIP,
-  LM.R_HIP,
-];
+// checks just head + torso. Legs are never required — feet drift out of frame
+// constantly and don't matter.
 
 /** Is the boxer's upper body in frame and well enough placed to track? */
 export function assessFraming(lm: Point[] | null): FramingStatus {

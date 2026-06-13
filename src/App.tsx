@@ -59,6 +59,7 @@ export default function App() {
   const [countdownS, setCountdownS] = useState<number | null>(null);
   const [outOfFrame, setOutOfFrame] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
+  const [dbg, setDbg] = useState(""); // temporary on-device diagnostic
 
   const modeRef = useRef<Mode>("idle");
   useEffect(() => {
@@ -129,16 +130,26 @@ export default function App() {
 
       let m;
       let lm: Point[] | null = null;
+      let poseCount = 0;
       try {
         // feed the video element directly — MediaPipe applies the element's
         // display orientation, which a hand-rolled canvas copy does not
         const result = landmarker.detectForVideo(video, performance.now());
+        poseCount = result.landmarks.length;
         // lock onto the boxer so a passerby can't hijack the tracking
         lm = subject.pick(result.landmarks);
         m = analyzer.update(lm, mediaT, vw / vh);
-      } catch {
+      } catch (e) {
+        setDbg(`detect error: ${e instanceof Error ? e.message : e}`);
         return; // drop the frame — one bad detect must not kill the session
       }
+
+      // temporary on-device diagnostic
+      const nose = lm?.[0];
+      setDbg(
+        `${vw}x${vh} disp ${video.clientWidth}x${video.clientHeight} pose ${poseCount} ` +
+          (nose ? `nose ${nose.x.toFixed(2)},${nose.y.toFixed(2)}` : "no-lm")
+      );
 
       const status = assessFraming(lm);
       if (!sessionStarted) {
@@ -321,6 +332,9 @@ export default function App() {
           )}
           {showAlertFrame && (
             <div className="stage-banner">OUT OF FRAME — STEP BACK INTO VIEW</div>
+          )}
+          {(mode === "setup" || mode === "live") && dbg && (
+            <div className="dbg-tag">{dbg}</div>
           )}
           {m && mode !== "setup" && (
             <div className="frame-tag">

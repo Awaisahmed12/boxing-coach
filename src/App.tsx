@@ -112,17 +112,19 @@ export default function App() {
     setCritiques([]);
     setFraming(null);
     setOutOfFrame(false);
-    let lastMediaT = -1;
+    let lastProcMs = -1; // wall-clock throttle for the rAF fallback
     let lastCritiqueT = 0;
     let readyFrames = 0;
     let badFrames = 0;
 
-    const processFrame = (mediaT: number) => {
+    // timeS is a monotonic wall-clock time (seconds). We deliberately do NOT
+    // use the video's currentTime / rVFC mediaTime as the clock: on a live
+    // iOS camera stream those don't advance, which froze detection after the
+    // first frame.
+    const processFrame = (timeS: number) => {
       const video = videoRef.current;
       const canvas = canvasRef.current;
       if (!video || !canvas || video.readyState < 2) return;
-      if (mediaT <= lastMediaT) return;
-      lastMediaT = mediaT;
 
       const vw = video.videoWidth;
       const vh = video.videoHeight;
@@ -138,7 +140,7 @@ export default function App() {
         poseCount = result.landmarks.length;
         // lock onto the boxer so a passerby can't hijack the tracking
         lm = subject.pick(result.landmarks);
-        m = analyzer.update(lm, mediaT, vw / vh);
+        m = analyzer.update(lm, timeS, vw / vh);
       } catch (e) {
         setDbg(`detect error: ${e instanceof Error ? e.message : e}`);
         return; // drop the frame — one bad detect must not kill the session
@@ -191,10 +193,10 @@ export default function App() {
       }
     };
 
-    // requestVideoFrameCallback fires exactly once per presented frame with
-    // its true media timestamp; rAF fires at display rate, where currentTime
-    // is a continuous clock — re-detecting duplicate frames there produces
-    // pure-jitter velocities, so the fallback gates on a plausible frame gap
+    // requestVideoFrameCallback fires once per presented camera frame, so each
+    // callback is genuinely fresh — drive the analyzer off the monotonic
+    // `now` it provides. Where rVFC is unavailable, fall back to rAF throttled
+    // to ~33ms so we don't re-detect the same frame repeatedly.
     const useVfc =
       !!videoRef.current &&
       typeof vfcOf(videoRef.current).requestVideoFrameCallback === "function";
@@ -203,9 +205,9 @@ export default function App() {
       const video = videoRef.current;
       if (!video || video.ended) return;
       // re-register before processing so a throw can't kill the chain
-      vfcRef.current = vfcOf(video).requestVideoFrameCallback!((_now, meta) => {
+      vfcRef.current = vfcOf(video).requestVideoFrameCallback!((now) => {
         pumpVfc();
-        processFrame(meta.mediaTime);
+        processFrame(now / 1000);
       });
     };
 
@@ -217,8 +219,12 @@ export default function App() {
         return;
       }
       rafRef.current = requestAnimationFrame(tick);
-      if (!useVfc && !video.paused && video.currentTime - lastMediaT >= 0.02) {
-        processFrame(video.currentTime);
+      if (!useVfc && !video.paused) {
+        const now = performance.now();
+        if (now - lastProcMs >= 33) {
+          lastProcMs = now;
+          processFrame(now / 1000);
+        }
       }
     };
 

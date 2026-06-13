@@ -4,6 +4,7 @@ import { buildCritiques } from "./analysis/critique";
 import { drawOverlay } from "./analysis/draw";
 import { assessFraming, type FramingStatus } from "./analysis/framing";
 import { getPoseLandmarker } from "./analysis/pose";
+import { SubjectSelector } from "./analysis/subject";
 import type { Critique, FrameMetrics, Point } from "./analysis/types";
 
 type Mode = "idle" | "loading" | "setup" | "live" | "done";
@@ -105,6 +106,7 @@ export default function App() {
     const landmarker = await getPoseLandmarker();
     let analyzer = new BoxingAnalyzer();
     analyzerRef.current = analyzer;
+    const subject = new SubjectSelector();
     let sessionStarted = false;
     setCritiques([]);
     setFraming(null);
@@ -141,7 +143,8 @@ export default function App() {
         }
         workCtx.drawImage(video, 0, 0, vw, vh);
         const result = landmarker.detectForVideo(work, performance.now());
-        lm = result.landmarks[0] ?? null;
+        // lock onto the boxer so a passerby can't hijack the tracking
+        lm = subject.pick(result.landmarks);
         m = analyzer.update(lm, mediaT, vw / vh);
       } catch {
         return; // drop the frame — one bad detect must not kill the session
@@ -286,10 +289,12 @@ export default function App() {
           {mode === "loading" && <p className="hint">LOADING POSE MODEL…</p>}
           {error && <p className="error">{error}</p>}
           <p className="hint">
-            Prop your phone up side-on or at a 45° angle to where you'll work,
-            with your upper body in view. The round starts automatically (with
-            a beep) once you've been in frame for a couple of seconds. All
-            analysis runs on your device — nothing is uploaded anywhere.
+            Set the camera anywhere your upper body is in view — on the floor,
+            a shelf, wherever. It works from any angle; side-on or 45° just
+            reads punches and slips best. The round starts automatically (with
+            a beep) a couple of seconds after you're in frame, and it stays
+            locked on you even if someone walks past. All analysis runs on
+            your device — nothing is uploaded anywhere.
           </p>
         </div>
       ) : null}

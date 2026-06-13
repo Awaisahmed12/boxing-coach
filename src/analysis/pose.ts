@@ -13,7 +13,7 @@ export async function getPoseLandmarker(): Promise<PoseLandmarker> {
   landmarker = await PoseLandmarker.createFromOptions(vision, {
     baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
     runningMode: "VIDEO",
-    numPoses: 1,
+    numPoses: 3, // detect bystanders too so we can lock onto the boxer
     minPoseDetectionConfidence: 0.5,
     minPosePresenceConfidence: 0.5,
     minTrackingConfidence: 0.5,

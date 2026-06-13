@@ -27,7 +27,8 @@ const PUNCH_MIN_EXT_GAIN = 0.12; // m — reach gained vs where the punch began
 const PUNCH_MIN_PATH_M = 0.18; // m — wrist travel; lets hooks/uppercuts count
 const PUNCH_STALL_DROP_M = 0.05; // m — extension fallback from peak that ends a punch
 const PUNCH_REFRACTORY_S = 0.12; // s — hard floor on time between punches
-const SPEED_GLITCH_MS = 12; // m/s — instantaneous readings above this are tracking glitches
+const SPEED_GLITCH_MS = 12; // m/s — smoothed readings above this are tracking glitches
+const RAW_GLITCH_MS = 22; // m/s (~49 mph) — raw per-frame speed above this is a teleport
 const JITTER_DEADBAND_N = 0.0025; // normalized units of per-frame landmark noise
 const TRACK_GAP_RESET_S = 0.5; // s — losing the pose this long resets motion state
 const MIN_VISIBILITY = 0.5; // below this the landmark is hallucinated, not seen
@@ -72,6 +73,8 @@ interface HandTracker {
   chinHist: number[]; // recent wrist-to-nose distances, for punch direction
   peakSpeed: number;
   peakInstSpeed: number; // peak un-smoothed absolute wrist speed during the punch
+  prevRawPos: Point | null; // raw (un-smoothed) wrist position last frame
+  peakRawSpeed: number; // peak speed from RAW positions — the displayed mph
   peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
   peakRelSpeed: number;
   peakElbowAngle: number;
@@ -108,6 +111,8 @@ function newHandTracker(): HandTracker {
     chinHist: [],
     peakSpeed: 0,
     peakInstSpeed: 0,
+    prevRawPos: null,
+    peakRawSpeed: 0,
     peakRelInst: 0,
     peakRelSpeed: 0,
     peakElbowAngle: 0,
@@ -129,6 +134,7 @@ function newHandTracker(): HandTracker {
 
 export class BoxingAnalyzer {
   private smoothed: Point[] | null = null;
+  private rawIso: Point[] | null = null; // raw landmarks in isotropic units
   private prevTime = -1;
   private startTime = -1;
   private lastSeenT = -1;
@@ -176,6 +182,7 @@ export class BoxingAnalyzer {
         y: p.y,
         visibility: p.visibility,
       }));
+      this.rawIso = null; // rebuilt below; prevRawPos cleared in resetMotion
       this.resetMotion();
       if (aspectChanged) {
         this.scaleSm = 0;
@@ -189,6 +196,17 @@ export class BoxingAnalyzer {
         this.smoothed[i].x = a * raw[i].x * aspect + (1 - a) * this.smoothed[i].x;
         this.smoothed[i].y = a * raw[i].y + (1 - a) * this.smoothed[i].y;
         this.smoothed[i].visibility = raw[i].visibility;
+      }
+    }
+    // keep raw landmarks in isotropic units too — punch speed is measured
+    // from these (the EMA above lags fast motion and halves the reading)
+    if (!this.rawIso) {
+      this.rawIso = raw.map((p) => ({ x: p.x * aspect, y: p.y }));
+    } else {
+      for (let i = 0; i < raw.length; i++) {
+        if (!Number.isFinite(raw[i].x) || !Number.isFinite(raw[i].y)) continue;
+        this.rawIso[i].x = raw[i].x * aspect;
+        this.rawIso[i].y = raw[i].y;
       }
     }
     this.lastSeenT = t;
@@ -237,6 +255,7 @@ export class BoxingAnalyzer {
       h.relSpeedMs = 0;
       h.relInstMs = 0;
       h.armed = true;
+      h.prevRawPos = null;
       h.shrinkingFrames = 0;
       h.extendStreak = 0;
       h.fastFrames = 0;
@@ -260,6 +279,7 @@ export class BoxingAnalyzer {
     h.relSpeedMs = 0;
     h.relInstMs = 0;
     h.armed = true;
+    h.prevRawPos = null;
     h.fastFrames = 0;
     h.extendStreak = 0;
     h.shrinkingFrames = 0;
@@ -292,6 +312,15 @@ export class BoxingAnalyzer {
     const rel = { x: wrist.x - shoulder.x, y: wrist.y - shoulder.y };
     let relStepM = 0;
     let absInstSpeed = 0;
+    let rawInstSpeed = 0;
+    // true hand speed from RAW (un-smoothed) positions — the EMA below is for
+    // detection stability, but it lags fast motion and underreads speed
+    const rawWrist = this.rawIso?.[hand === "LEFT" ? LM.L_WRIST : LM.R_WRIST];
+    if (rawWrist && h.prevRawPos) {
+      const ri = (dist(rawWrist, h.prevRawPos) * this.scaleSm) / dt;
+      if (ri < RAW_GLITCH_MS) rawInstSpeed = ri;
+    }
+    if (rawWrist) h.prevRawPos = { x: rawWrist.x, y: rawWrist.y };
     if (h.prevPos && h.prevRel) {
       const absInst =
         Math.max(0, dist(wrist, h.prevPos) * this.scaleSm - deadband) / dt;
@@ -364,6 +393,7 @@ export class BoxingAnalyzer {
       case "EXTENDING": {
         h.peakSpeed = Math.max(h.peakSpeed, h.speedMs);
         h.peakInstSpeed = Math.max(h.peakInstSpeed, absInstSpeed);
+        h.peakRawSpeed = Math.max(h.peakRawSpeed, rawInstSpeed);
         h.peakRelInst = Math.max(h.peakRelInst, h.relInstMs);
         h.peakRelSpeed = Math.max(h.peakRelSpeed, h.relSpeedMs);
         h.peakElbowAngle = Math.max(h.peakElbowAngle, elbowAngle);
@@ -389,9 +419,11 @@ export class BoxingAnalyzer {
               time: h.peakExtT,
               hand,
               type: this.classify(hand, lm, h.peakElbowAngle),
-              // the double-EMA peak underestimates a snap by ~40%; the
-              // glitch-capped instantaneous peak is closer to true hand speed
-              speedMph: Math.max(h.peakSpeed, h.peakInstSpeed) * MS_TO_MPH,
+              // measured from raw positions: the smoothed peaks lag fast
+              // motion and roughly halve the reading
+              speedMph:
+                Math.max(h.peakRawSpeed, h.peakInstSpeed, h.peakSpeed) *
+                MS_TO_MPH,
               peakElbowAngle: h.peakElbowAngle,
               extensionM: h.peakExtension,
               retractionMs: null,
@@ -449,6 +481,7 @@ export class BoxingAnalyzer {
     h.punchBaseExt = Math.max(base, extension - 0.3); // cap stale streak bases
     h.peakSpeed = h.speedMs;
     h.peakInstSpeed = 0;
+    h.peakRawSpeed = 0;
     h.peakRelInst = h.relInstMs;
     h.peakRelSpeed = h.relSpeedMs;
     h.peakElbowAngle = elbowAngle;

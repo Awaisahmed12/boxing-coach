@@ -5,14 +5,15 @@ const MIN_VIS = 0.5;
 
 // Head defense is measured relative to the hips, so footwork and walking
 // don't read as slips — only bending at the waist/knees does.
-const ONSET_X_M = 0.1; // lateral head travel that reads as a slip
-const ONSET_Y_M = 0.15; // drop that reads as a duck / level change
-const RETURN_X_M = 0.05;
-const RETURN_Y_M = 0.07;
-const LEAVE_CENTER_M = 0.04;
-const MAX_ONSET_S = 0.6; // slower than this is a posture change, not a maneuver
+const ONSET_X_M = 0.16; // lateral head travel that reads as a slip
+const ONSET_Y_M = 0.2; // drop that reads as a duck / level change
+const RETURN_X_M = 0.06;
+const RETURN_Y_M = 0.08;
+const LEAVE_CENTER_M = 0.05;
+const MIN_ONSET_S = 0.06; // faster than this (1-2 frames) is tracking noise, not a slip
+const MAX_ONSET_S = 0.5; // slower than this is a posture change, not a maneuver
 const MAX_MANEUVER_S = 1.2; // longer than this means they settled in a new stance
-const DEFENSE_REFRACTORY_S = 0.3;
+const DEFENSE_REFRACTORY_S = 0.4;
 
 const STEP_SPEED_MS = 0.3; // ankle-midpoint speed that counts as moving
 const STEP_DIST_M = 0.08; // minimum travel for a burst to count as a step
@@ -94,7 +95,10 @@ export class MovementTracker {
         this.leftCenterT = t;
       }
       if (Math.abs(dx) > ONSET_X_M || dyDown > ONSET_Y_M) {
-        const quick = this.leftCenterT >= 0 && t - this.leftCenterT < MAX_ONSET_S;
+        const elapsed = this.leftCenterT >= 0 ? t - this.leftCenterT : Infinity;
+        // a real slip takes a few frames — too fast is a tracking pop, too
+        // slow is just settling into a new stance
+        const quick = elapsed >= MIN_ONSET_S && elapsed < MAX_ONSET_S;
         if (quick && t - this.lastDefenseT > DEFENSE_REFRACTORY_S) {
           this.displaced = true;
           this.displacedT = t;

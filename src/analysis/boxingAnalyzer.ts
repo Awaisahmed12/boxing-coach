@@ -198,14 +198,18 @@ export class BoxingAnalyzer {
     this.totalFrames++;
 
     const shoulderW = dist(lm[LM.L_SHOULDER], lm[LM.R_SHOULDER]);
-    const torsoLen = this.torsoLen(lm);
     // px→m scale: a bladed stance foreshortens the shoulders, a crouch the
     // torso — take whichever estimate implies the smaller scale, and smooth
-    // it so body rotation doesn't modulate speeds and thresholds
-    const instScale = Math.min(
-      SHOULDER_WIDTH_M / Math.max(shoulderW, 0.02),
-      TORSO_LENGTH_M / Math.max(torsoLen, 0.02)
-    );
+    // it so body rotation doesn't modulate speeds and thresholds. Hips are
+    // often out of frame (reclining, seated, close-up), so only use the torso
+    // estimate when both hips are actually tracked.
+    const hipsSeen =
+      (lm[LM.L_HIP].visibility ?? 1) >= MIN_VISIBILITY &&
+      (lm[LM.R_HIP].visibility ?? 1) >= MIN_VISIBILITY;
+    const shoulderScale = SHOULDER_WIDTH_M / Math.max(shoulderW, 0.02);
+    const instScale = hipsSeen
+      ? Math.min(shoulderScale, TORSO_LENGTH_M / Math.max(this.torsoLen(lm), 0.02))
+      : shoulderScale;
     this.scaleSm = this.scaleSm > 0 ? 0.9 * this.scaleSm + 0.1 * instScale : instScale;
     this.scaleFast =
       this.scaleFast > 0 ? 0.6 * this.scaleFast + 0.4 * instScale : instScale;

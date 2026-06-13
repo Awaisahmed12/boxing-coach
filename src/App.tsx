@@ -60,6 +60,7 @@ export default function App() {
   const [outOfFrame, setOutOfFrame] = useState(false);
   const [facing, setFacing] = useState<"user" | "environment">("user");
   const [dbg, setDbg] = useState(""); // temporary on-device diagnostic
+  const camInfoRef = useRef(""); // actual camera capture settings
 
   const modeRef = useRef<Mode>("idle");
   useEffect(() => {
@@ -116,6 +117,8 @@ export default function App() {
     let lastCritiqueT = 0;
     let readyFrames = 0;
     let badFrames = 0;
+    let prevFrameS = -1; // for measured processing fps
+    let fpsEma = 0;
 
     // timeS is a monotonic wall-clock time (seconds). We deliberately do NOT
     // use the video's currentTime / rVFC mediaTime as the clock: on a live
@@ -147,9 +150,14 @@ export default function App() {
       }
 
       // temporary on-device diagnostic
+      if (prevFrameS >= 0 && timeS > prevFrameS) {
+        const inst = 1 / (timeS - prevFrameS);
+        fpsEma = fpsEma > 0 ? 0.9 * fpsEma + 0.1 * inst : inst;
+      }
+      prevFrameS = timeS;
       const nose = lm?.[0];
       setDbg(
-        `${vw}x${vh} disp ${video.clientWidth}x${video.clientHeight} pose ${poseCount} ` +
+        `cam ${camInfoRef.current} ~${fpsEma.toFixed(0)}fps pose ${poseCount} ` +
           (nose ? `nose ${nose.x.toFixed(2)},${nose.y.toFixed(2)}` : "no-lm")
       );
 
@@ -237,10 +245,21 @@ export default function App() {
     setMode("loading");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: face, width: { ideal: 1280 } },
+        video: {
+          facingMode: face,
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          // higher capture rate = less under-sampling of fast punches, the
+          // single biggest factor in speed accuracy
+          frameRate: { ideal: 60 },
+        },
         audio: false,
       });
       streamRef.current = stream;
+      const settings = stream.getVideoTracks()[0]?.getSettings();
+      camInfoRef.current = settings
+        ? `${settings.width}x${settings.height}@${Math.round(settings.frameRate ?? 0)}`
+        : "";
       // unplugged/revoked camera never sets video.ended — end the session
       // instead of spinning on a frozen frame
       stream.getVideoTracks()[0]?.addEventListener("ended", finishSession, {

@@ -29,6 +29,7 @@ const PUNCH_STALL_DROP_M = 0.05; // m — extension fallback from peak that ends
 const PUNCH_REFRACTORY_S = 0.12; // s — hard floor on time between punches
 const SPEED_GLITCH_MS = 12; // m/s — smoothed readings above this are tracking glitches
 const RAW_GLITCH_MS = 22; // m/s (~49 mph) — raw per-frame speed above this is a teleport
+const MAX_DEPTH_BOOST = 1.6; // cap on the foreshortening speed correction
 const JITTER_DEADBAND_N = 0.0025; // normalized units of per-frame landmark noise
 const TRACK_GAP_RESET_S = 0.5; // s — losing the pose this long resets motion state
 const MIN_VISIBILITY = 0.5; // below this the landmark is hallucinated, not seen
@@ -83,6 +84,7 @@ interface HandTracker {
   peakSpeed: number;
   peakInstSpeed: number; // peak un-smoothed absolute wrist speed during the punch
   prevRawPos: Point | null; // raw (un-smoothed) wrist position last frame
+  maxForearm: number; // longest forearm seen (m) — the in-plane reference length
   rawSpeedHist: number[]; // last few raw speeds, median-filtered to despike
   peakRawSpeed: number; // peak speed from RAW positions — the displayed mph
   peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
@@ -122,6 +124,7 @@ function newHandTracker(): HandTracker {
     peakSpeed: 0,
     peakInstSpeed: 0,
     prevRawPos: null,
+    maxForearm: 0,
     rawSpeedHist: [],
     peakRawSpeed: 0,
     peakRelInst: 0,
@@ -329,8 +332,20 @@ export class BoxingAnalyzer {
     // true hand speed from RAW (un-smoothed) positions — the EMA below is for
     // detection stability, but it lags fast motion and underreads speed
     const rawWrist = this.rawIso?.[hand === "LEFT" ? LM.L_WRIST : LM.R_WRIST];
+    const rawElbow = this.rawIso?.[hand === "LEFT" ? LM.L_ELBOW : LM.R_ELBOW];
+    // depth correction: the forearm has a fixed real length, so when it looks
+    // short the arm is angled toward/away from the camera and the punch has
+    // motion we can't see in 2D. Scale the speed up by how foreshortened it is.
+    let depthBoost = 1;
+    if (rawWrist && rawElbow) {
+      const forearm = dist(rawWrist, rawElbow) * this.scaleSm;
+      h.maxForearm = Math.max(forearm, h.maxForearm * 0.999); // slow forget
+      if (h.maxForearm > 0.05) {
+        depthBoost = Math.min(MAX_DEPTH_BOOST, h.maxForearm / Math.max(forearm, 0.05));
+      }
+    }
     if (rawWrist && h.prevRawPos) {
-      const ri = (dist(rawWrist, h.prevRawPos) * this.scaleSm) / dt;
+      const ri = (dist(rawWrist, h.prevRawPos) * this.scaleSm * depthBoost) / dt;
       if (ri < RAW_GLITCH_MS) {
         h.rawSpeedHist.push(ri);
         if (h.rawSpeedHist.length > 3) h.rawSpeedHist.shift();

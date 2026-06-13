@@ -18,15 +18,15 @@ const MS_TO_MPH = 2.23694;
 // smoothed values, which the EMA chain attenuates to roughly 0.6x of true
 // speed — these correspond to ~3.0/3.7 m/s true relative wrist speed.
 const PUNCH_START_SPEED = 1.8; // m/s — smoothed relative speed that begins a punch
-const PUNCH_MIN_PEAK_SPEED = 2.2; // m/s — smoothed relative peak required to count
+const PUNCH_RELAX_SPEED = 1.3; // m/s — hand must slow below this between punches
+// Count gate uses the UN-smoothed relative peak: short 3-4 frame punches get
+// flattened by the speed EMA and were being missed, while the raw per-frame
+// peak (still glitch-capped) reflects the real snap.
+const PUNCH_MIN_PEAK_INST = 3.2; // m/s — raw relative peak required to count
 const PUNCH_MIN_EXT_GAIN = 0.12; // m — reach gained vs where the punch began
 const PUNCH_MIN_PATH_M = 0.18; // m — wrist travel; lets hooks/uppercuts count
-// alternative gate: a slightly slower punch with unmistakable extension gain
-// still counts — recovers light jabs filmed at the recommended 45° angle
-const PUNCH_ALT_PEAK_SPEED = 1.9; // m/s
-const PUNCH_ALT_EXT_GAIN = 0.15; // m — far beyond what jitter can fake
 const PUNCH_STALL_DROP_M = 0.05; // m — extension fallback from peak that ends a punch
-const PUNCH_REFRACTORY_S = 0.15; // s — per-hand lockout measured from punch peak
+const PUNCH_REFRACTORY_S = 0.12; // s — hard floor on time between punches
 const SPEED_GLITCH_MS = 12; // m/s — instantaneous readings above this are tracking glitches
 const JITTER_DEADBAND_N = 0.0025; // normalized units of per-frame landmark noise
 const TRACK_GAP_RESET_S = 0.5; // s — losing the pose this long resets motion state
@@ -57,6 +57,8 @@ interface HandTracker {
   phase: PunchPhase;
   speedMs: number; // smoothed absolute wrist speed (what the UI shows)
   relSpeedMs: number; // smoothed shoulder-relative wrist speed (what gates punches)
+  relInstMs: number; // raw shoulder-relative wrist speed this frame
+  armed: boolean; // hand has relaxed since the last count; ready for a new punch
   prevPos: Point | null;
   prevRel: Point | null;
   prevExtension: number;
@@ -69,7 +71,8 @@ interface HandTracker {
   stepBuf: number[]; // last few relative steps, to seed pathLen at punch entry
   chinHist: number[]; // recent wrist-to-nose distances, for punch direction
   peakSpeed: number;
-  peakInstSpeed: number; // peak un-smoothed wrist speed during the punch
+  peakInstSpeed: number; // peak un-smoothed absolute wrist speed during the punch
+  peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
   peakRelSpeed: number;
   peakElbowAngle: number;
   peakExtension: number;
@@ -90,6 +93,8 @@ function newHandTracker(): HandTracker {
     phase: "GUARD",
     speedMs: 0,
     relSpeedMs: 0,
+    relInstMs: 0,
+    armed: true,
     prevPos: null,
     prevRel: null,
     prevExtension: Number.POSITIVE_INFINITY,
@@ -103,6 +108,7 @@ function newHandTracker(): HandTracker {
     chinHist: [],
     peakSpeed: 0,
     peakInstSpeed: 0,
+    peakRelInst: 0,
     peakRelSpeed: 0,
     peakElbowAngle: 0,
     peakExtension: 0,
@@ -225,6 +231,8 @@ export class BoxingAnalyzer {
       h.prevRel = null;
       h.speedMs = 0;
       h.relSpeedMs = 0;
+      h.relInstMs = 0;
+      h.armed = true;
       h.shrinkingFrames = 0;
       h.extendStreak = 0;
       h.fastFrames = 0;
@@ -246,6 +254,8 @@ export class BoxingAnalyzer {
     h.prevRel = null;
     h.speedMs = 0;
     h.relSpeedMs = 0;
+    h.relInstMs = 0;
+    h.armed = true;
     h.fastFrames = 0;
     h.extendStreak = 0;
     h.shrinkingFrames = 0;
@@ -289,13 +299,18 @@ export class BoxingAnalyzer {
       const relInst = relStepM / dt;
       if (relInst < SPEED_GLITCH_MS) {
         h.relSpeedMs = 0.5 * relInst + 0.5 * h.relSpeedMs;
+        h.relInstMs = relInst;
       } else {
         relStepM = 0;
+        h.relInstMs = 0;
       }
     }
     h.prevPos = { x: wrist.x, y: wrist.y };
     h.prevRel = rel;
     h.fastFrames = h.relSpeedMs > PUNCH_START_SPEED ? h.fastFrames + 1 : 0;
+    // a punch can only start once the hand has relaxed since the last one —
+    // a continuing arc or a pull-back never slows, so it can't double-count
+    if (h.relSpeedMs < PUNCH_RELAX_SPEED) h.armed = true;
     h.stepBuf.push(relStepM);
     if (h.stepBuf.length > 3) h.stepBuf.shift();
 
@@ -323,7 +338,9 @@ export class BoxingAnalyzer {
     }
 
     const startReady =
-      h.relSpeedMs > PUNCH_START_SPEED && t - h.lastPunchT > PUNCH_REFRACTORY_S;
+      h.armed &&
+      h.relSpeedMs > PUNCH_START_SPEED &&
+      t - h.lastPunchT > PUNCH_REFRACTORY_S;
     const outward = h.extendStreak >= 2;
     // hooks sweep at near-constant wrist-shoulder radius, so they never build
     // an extension streak — sustained relative speed that is neither pulling
@@ -343,6 +360,7 @@ export class BoxingAnalyzer {
       case "EXTENDING": {
         h.peakSpeed = Math.max(h.peakSpeed, h.speedMs);
         h.peakInstSpeed = Math.max(h.peakInstSpeed, absInstSpeed);
+        h.peakRelInst = Math.max(h.peakRelInst, h.relInstMs);
         h.peakRelSpeed = Math.max(h.peakRelSpeed, h.relSpeedMs);
         h.peakElbowAngle = Math.max(h.peakElbowAngle, elbowAngle);
         if (extension > h.peakExtension) {
@@ -356,11 +374,12 @@ export class BoxingAnalyzer {
           extension < h.peakExtension - PUNCH_STALL_DROP_M;
         if (stalled) {
           const extGain = h.peakExtension - h.punchBaseExt;
+          // a real punch snaps (raw relative peak) AND travels (reach gained
+          // or arc path) — the snap separates it from a slow reach, the travel
+          // from a twitch
           const counts =
-            (h.peakRelSpeed > PUNCH_MIN_PEAK_SPEED &&
-              (extGain > PUNCH_MIN_EXT_GAIN || h.pathLen > PUNCH_MIN_PATH_M)) ||
-            (h.peakRelSpeed > PUNCH_ALT_PEAK_SPEED &&
-              extGain > PUNCH_ALT_EXT_GAIN);
+            h.peakRelInst > PUNCH_MIN_PEAK_INST &&
+            (extGain > PUNCH_MIN_EXT_GAIN || h.pathLen > PUNCH_MIN_PATH_M);
           if (counts) {
             const punch: PunchEvent = {
               time: h.peakExtT,
@@ -420,11 +439,13 @@ export class BoxingAnalyzer {
 
   private beginPunch(h: HandTracker, extension: number, elbowAngle: number, t: number) {
     h.phase = "EXTENDING";
+    h.armed = false; // must relax again before the next punch can start
     h.punchStartT = t;
     const base = h.extendStreak > 0 ? h.streakBaseExt : extension;
     h.punchBaseExt = Math.max(base, extension - 0.3); // cap stale streak bases
     h.peakSpeed = h.speedMs;
     h.peakInstSpeed = 0;
+    h.peakRelInst = h.relInstMs;
     h.peakRelSpeed = h.relSpeedMs;
     h.peakElbowAngle = elbowAngle;
     h.peakExtension = extension;

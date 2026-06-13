@@ -265,7 +265,9 @@ export default function App() {
   }, [facing, stopLoop, startLive]);
 
   const m = metrics;
-  const speed = m ? Math.max(m.speedMph.left, m.speedMph.right) : 0;
+  // hold the last punch's speed rather than the live wrist speed, which
+  // decays to 0 between punches and makes the number jump constantly
+  const lastPunchMph = m?.lastPunch ? m.lastPunch.speedMph : 0;
   const showAlertFrame = outOfFrame && mode === "live";
 
   return (
@@ -341,12 +343,11 @@ export default function App() {
         <div className={`panels ${mode === "setup" ? "hidden" : ""}`}>
           <section className="card">
             <h2>HAND SPEED</h2>
-            <div className="big">{speed.toFixed(0)} MPH</div>
+            <div className="big">{lastPunchMph.toFixed(0)} MPH</div>
             <div className="sub">
-              SESSION MAX: {m ? m.maxSpeedMph.toFixed(0) : 0} MPH
+              LAST PUNCH
               <br />
-              L: {m ? m.speedMph.left.toFixed(0) : 0} R:{" "}
-              {m ? m.speedMph.right.toFixed(0) : 0}
+              SESSION MAX: {m ? m.maxSpeedMph.toFixed(0) : 0} MPH
             </div>
           </section>
 

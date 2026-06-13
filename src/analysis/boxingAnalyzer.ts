@@ -43,6 +43,15 @@ const TRAIL_LEN = 14;
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
+// median of up to 3 values — rejects a single-frame spike without lagging
+function med3(v: number[]): number {
+  if (v.length === 0) return 0;
+  if (v.length === 1) return v[0];
+  if (v.length === 2) return Math.min(v[0], v[1]);
+  const s = [...v].sort((a, b) => a - b);
+  return s[1];
+}
+
 function angleDeg(a: Point, vertex: Point, c: Point): number {
   const v1 = { x: a.x - vertex.x, y: a.y - vertex.y };
   const v2 = { x: c.x - vertex.x, y: c.y - vertex.y };
@@ -74,6 +83,7 @@ interface HandTracker {
   peakSpeed: number;
   peakInstSpeed: number; // peak un-smoothed absolute wrist speed during the punch
   prevRawPos: Point | null; // raw (un-smoothed) wrist position last frame
+  rawSpeedHist: number[]; // last few raw speeds, median-filtered to despike
   peakRawSpeed: number; // peak speed from RAW positions — the displayed mph
   peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
   peakRelSpeed: number;
@@ -112,6 +122,7 @@ function newHandTracker(): HandTracker {
     peakSpeed: 0,
     peakInstSpeed: 0,
     prevRawPos: null,
+    rawSpeedHist: [],
     peakRawSpeed: 0,
     peakRelInst: 0,
     peakRelSpeed: 0,
@@ -256,6 +267,7 @@ export class BoxingAnalyzer {
       h.relInstMs = 0;
       h.armed = true;
       h.prevRawPos = null;
+      h.rawSpeedHist = [];
       h.shrinkingFrames = 0;
       h.extendStreak = 0;
       h.fastFrames = 0;
@@ -280,6 +292,7 @@ export class BoxingAnalyzer {
     h.relInstMs = 0;
     h.armed = true;
     h.prevRawPos = null;
+    h.rawSpeedHist = [];
     h.fastFrames = 0;
     h.extendStreak = 0;
     h.shrinkingFrames = 0;
@@ -318,7 +331,13 @@ export class BoxingAnalyzer {
     const rawWrist = this.rawIso?.[hand === "LEFT" ? LM.L_WRIST : LM.R_WRIST];
     if (rawWrist && h.prevRawPos) {
       const ri = (dist(rawWrist, h.prevRawPos) * this.scaleSm) / dt;
-      if (ri < RAW_GLITCH_MS) rawInstSpeed = ri;
+      if (ri < RAW_GLITCH_MS) {
+        h.rawSpeedHist.push(ri);
+        if (h.rawSpeedHist.length > 3) h.rawSpeedHist.shift();
+        // median of the last 3 frames: a real punch holds speed across
+        // several frames, a noise pop is gone in one
+        rawInstSpeed = med3(h.rawSpeedHist);
+      }
     }
     if (rawWrist) h.prevRawPos = { x: rawWrist.x, y: rawWrist.y };
     if (h.prevPos && h.prevRel) {

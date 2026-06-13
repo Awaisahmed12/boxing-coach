@@ -286,10 +286,10 @@ export default function App() {
           {mode === "loading" && <p className="hint">LOADING POSE MODEL…</p>}
           {error && <p className="error">{error}</p>}
           <p className="hint">
-            Prop your phone up side-on or at a 45° angle to where you'll work.
-            The round starts automatically (with a beep) once your full body
-            has been in frame for a couple of seconds. All analysis runs on
-            your device — nothing is uploaded anywhere.
+            Prop your phone up side-on or at a 45° angle to where you'll work,
+            with your upper body in view. The round starts automatically (with
+            a beep) once you've been in frame for a couple of seconds. All
+            analysis runs on your device — nothing is uploaded anywhere.
           </p>
         </div>
       ) : null}

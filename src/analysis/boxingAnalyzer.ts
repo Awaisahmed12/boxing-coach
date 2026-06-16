@@ -25,6 +25,10 @@ const PUNCH_RELAX_SPEED = 1.3; // m/s — hand must slow below this between punc
 const PUNCH_MIN_PEAK_INST = 3.2; // m/s — raw relative peak required to count
 const PUNCH_MIN_EXT_GAIN = 0.12; // m — reach gained vs where the punch began
 const PUNCH_MIN_PATH_M = 0.18; // m — wrist travel; lets hooks/uppercuts count
+// range of motion: a real punch works the arm — the elbow extends/bends or
+// the elbow joint travels. A wrist-landmark twitch leaves the elbow still.
+const PUNCH_MIN_ELBOW_SWING = 18; // deg of elbow-angle change during the punch
+const PUNCH_MIN_ELBOW_TRAVEL_M = 0.1; // or this much elbow-joint travel
 const PUNCH_STALL_DROP_M = 0.05; // m — extension fallback from peak that ends a punch
 const PUNCH_REFRACTORY_S = 0.12; // s — hard floor on time between punches
 const SPEED_GLITCH_MS = 12; // m/s — smoothed readings above this are tracking glitches
@@ -90,6 +94,10 @@ interface HandTracker {
   peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
   peakRelSpeed: number;
   peakElbowAngle: number;
+  minElbowAngle: number; // lowest elbow angle during the punch
+  startElbowAngle: number; // elbow angle when the punch began
+  startElbowPos: Point | null; // elbow position when the punch began
+  peakElbowTravel: number; // furthest the elbow joint moved during the punch
   peakExtension: number;
   peakExtT: number; // when peak extension happened — the punch's true landing time
   punchStartT: number;
@@ -130,6 +138,10 @@ function newHandTracker(): HandTracker {
     peakRelInst: 0,
     peakRelSpeed: 0,
     peakElbowAngle: 0,
+    minElbowAngle: 180,
+    startElbowAngle: 0,
+    startElbowPos: null,
+    peakElbowTravel: 0,
     peakExtension: 0,
     peakExtT: 0,
     punchStartT: 0,
@@ -420,7 +432,7 @@ export class BoxingAnalyzer {
         if (h.guardUp) h.guardFrames++;
         h.activeFrames++;
         if (startReady && (outward || arcing)) {
-          this.beginPunch(h, extension, elbowAngle, t);
+          this.beginPunch(h, extension, elbowAngle, elbow, t);
         }
         break;
       }
@@ -431,6 +443,13 @@ export class BoxingAnalyzer {
         h.peakRelInst = Math.max(h.peakRelInst, h.relInstMs);
         h.peakRelSpeed = Math.max(h.peakRelSpeed, h.relSpeedMs);
         h.peakElbowAngle = Math.max(h.peakElbowAngle, elbowAngle);
+        h.minElbowAngle = Math.min(h.minElbowAngle, elbowAngle);
+        if (h.startElbowPos) {
+          h.peakElbowTravel = Math.max(
+            h.peakElbowTravel,
+            dist(elbow, h.startElbowPos) * this.scaleFast
+          );
+        }
         if (extension > h.peakExtension) {
           h.peakExtension = extension;
           h.peakExtT = t;
@@ -442,12 +461,22 @@ export class BoxingAnalyzer {
           extension < h.peakExtension - PUNCH_STALL_DROP_M;
         if (stalled) {
           const extGain = h.peakExtension - h.punchBaseExt;
+          // the arm must work through a real range of motion — the elbow
+          // angle changes or the elbow joint travels. A wrist-landmark twitch
+          // (high speed, no arm movement) leaves the elbow still and fails.
+          const elbowSwing = Math.max(
+            h.peakElbowAngle - h.startElbowAngle,
+            h.startElbowAngle - h.minElbowAngle
+          );
+          const rangeOK =
+            elbowSwing > PUNCH_MIN_ELBOW_SWING ||
+            h.peakElbowTravel > PUNCH_MIN_ELBOW_TRAVEL_M;
           // a real punch snaps (raw relative peak) AND travels (reach gained
-          // or arc path) — the snap separates it from a slow reach, the travel
-          // from a twitch
+          // or arc path) AND works the arm (range of motion)
           const counts =
             h.peakRelInst > PUNCH_MIN_PEAK_INST &&
-            (extGain > PUNCH_MIN_EXT_GAIN || h.pathLen > PUNCH_MIN_PATH_M);
+            (extGain > PUNCH_MIN_EXT_GAIN || h.pathLen > PUNCH_MIN_PATH_M) &&
+            rangeOK;
           if (counts) {
             const punch: PunchEvent = {
               time: h.peakExtT,
@@ -488,7 +517,7 @@ export class BoxingAnalyzer {
             h.pendingPunch.retractionMs = (t - h.retractStartT) * 1000;
             h.pendingPunch = null;
           }
-          this.beginPunch(h, extension, elbowAngle, t);
+          this.beginPunch(h, extension, elbowAngle, elbow, t);
           break;
         }
         const backInGuard = extension < h.punchBaseExt + 0.05;
@@ -507,7 +536,13 @@ export class BoxingAnalyzer {
     }
   }
 
-  private beginPunch(h: HandTracker, extension: number, elbowAngle: number, t: number) {
+  private beginPunch(
+    h: HandTracker,
+    extension: number,
+    elbowAngle: number,
+    elbow: Point,
+    t: number
+  ) {
     h.phase = "EXTENDING";
     h.armed = false; // must relax again before the next punch can start
     h.punchStartT = t;
@@ -519,6 +554,10 @@ export class BoxingAnalyzer {
     h.peakRelInst = h.relInstMs;
     h.peakRelSpeed = h.relSpeedMs;
     h.peakElbowAngle = elbowAngle;
+    h.minElbowAngle = elbowAngle;
+    h.startElbowAngle = elbowAngle;
+    h.startElbowPos = { x: elbow.x, y: elbow.y };
+    h.peakElbowTravel = 0;
     h.peakExtension = extension;
     h.peakExtT = t;
     // the frames that armed the entry are part of the punch, but capped so a

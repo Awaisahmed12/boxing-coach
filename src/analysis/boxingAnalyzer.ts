@@ -18,14 +18,13 @@ const MS_TO_MPH = 2.23694;
 // slips and walking toward the camera can't trigger them. Thresholds are on
 // smoothed values, which the EMA chain attenuates to roughly 0.6x of true
 // speed — these correspond to ~3.0/3.7 m/s true relative wrist speed.
-const PUNCH_START_SPEED = 1.8; // m/s — smoothed relative speed that begins a punch
-const PUNCH_RELAX_SPEED = 1.3; // m/s — hand must slow below this between punches
-// Count gate uses the UN-smoothed relative peak: short 3-4 frame punches get
-// flattened by the speed EMA and were being missed, while the raw per-frame
-// peak (still glitch-capped) reflects the real snap.
-const PUNCH_MIN_PEAK_INST = 3.2; // m/s — raw relative peak required to count
-const PUNCH_MIN_EXT_GAIN = 0.12; // m — reach gained vs where the punch began
-const PUNCH_MIN_PATH_M = 0.18; // m — wrist travel; lets hooks/uppercuts count
+// A punch is the arm reaching out through a real range of motion, at any
+// speed — speed is measured for display but never required to count, so slow
+// practice punches register too.
+const PUNCH_START_SPEED = 1.2; // m/s — gentle motion that opens a punch
+const PUNCH_RELAX_SPEED = 0.9; // m/s — hand must slow below this between punches
+const PUNCH_MIN_EXT_GAIN = 0.16; // m — reach gained vs where the punch began
+const PUNCH_MIN_PATH_M = 0.24; // m — wrist travel; lets hooks/uppercuts count
 // range of motion: a real punch works the arm — the elbow extends/bends or
 // the elbow joint travels. A wrist-landmark twitch leaves the elbow still.
 const PUNCH_MIN_ELBOW_SWING = 18; // deg of elbow-angle change during the punch
@@ -75,7 +74,6 @@ interface HandTracker {
   phase: PunchPhase;
   speedMs: number; // smoothed absolute wrist speed (what the UI shows)
   relSpeedMs: number; // smoothed shoulder-relative wrist speed (what gates punches)
-  relInstMs: number; // raw shoulder-relative wrist speed this frame
   armed: boolean; // hand has relaxed since the last count; ready for a new punch
   prevPos: Point | null;
   prevRel: Point | null;
@@ -94,7 +92,6 @@ interface HandTracker {
   maxForearm: number; // longest forearm seen (m) — the in-plane reference length
   rawSpeedHist: number[]; // last few raw speeds, median-filtered to despike
   peakRawSpeed: number; // peak speed from RAW positions — the displayed mph
-  peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
   peakElbowAngle: number;
   minElbowAngle: number; // lowest elbow angle during the punch
   startElbowAngle: number; // elbow angle when the punch began
@@ -118,7 +115,6 @@ function newHandTracker(): HandTracker {
     phase: "GUARD",
     speedMs: 0,
     relSpeedMs: 0,
-    relInstMs: 0,
     armed: true,
     prevPos: null,
     prevRel: null,
@@ -137,7 +133,6 @@ function newHandTracker(): HandTracker {
     maxForearm: 0,
     rawSpeedHist: [],
     peakRawSpeed: 0,
-    peakRelInst: 0,
     peakElbowAngle: 0,
     minElbowAngle: 180,
     startElbowAngle: 0,
@@ -287,7 +282,6 @@ export class BoxingAnalyzer {
       h.prevRel = null;
       h.speedMs = 0;
       h.relSpeedMs = 0;
-      h.relInstMs = 0;
       h.armed = true;
       h.prevRawPos = null;
       h.rawSpeedHist = [];
@@ -312,7 +306,6 @@ export class BoxingAnalyzer {
     h.prevRel = null;
     h.speedMs = 0;
     h.relSpeedMs = 0;
-    h.relInstMs = 0;
     h.armed = true;
     h.prevRawPos = null;
     h.rawSpeedHist = [];
@@ -386,10 +379,8 @@ export class BoxingAnalyzer {
       const relInst = relStepM / dt;
       if (relInst < SPEED_GLITCH_MS) {
         h.relSpeedMs = 0.5 * relInst + 0.5 * h.relSpeedMs;
-        h.relInstMs = relInst;
       } else {
         relStepM = 0;
-        h.relInstMs = 0;
       }
     }
     h.prevPos = { x: wrist.x, y: wrist.y };
@@ -449,7 +440,6 @@ export class BoxingAnalyzer {
         h.peakSpeed = Math.max(h.peakSpeed, h.speedMs);
         h.peakInstSpeed = Math.max(h.peakInstSpeed, absInstSpeed);
         h.peakRawSpeed = Math.max(h.peakRawSpeed, rawInstSpeed);
-        h.peakRelInst = Math.max(h.peakRelInst, h.relInstMs);
         h.peakElbowAngle = Math.max(h.peakElbowAngle, elbowAngle);
         h.minElbowAngle = Math.min(h.minElbowAngle, elbowAngle);
         if (h.startElbowPos) {
@@ -479,12 +469,11 @@ export class BoxingAnalyzer {
           const rangeOK =
             elbowSwing > PUNCH_MIN_ELBOW_SWING ||
             h.peakElbowTravel > PUNCH_MIN_ELBOW_TRAVEL_M;
-          // a real punch snaps (raw relative peak) AND travels (reach gained
-          // or arc path) AND works the arm (range of motion)
+          // a punch = the arm worked through a range of motion (elbow) AND the
+          // wrist reached out a real distance (reach gained or arc path). No
+          // speed requirement — slow punches count too.
           const counts =
-            h.peakRelInst > PUNCH_MIN_PEAK_INST &&
-            (extGain > PUNCH_MIN_EXT_GAIN || h.pathLen > PUNCH_MIN_PATH_M) &&
-            rangeOK;
+            rangeOK && (extGain > PUNCH_MIN_EXT_GAIN || h.pathLen > PUNCH_MIN_PATH_M);
           if (counts) {
             const punch: PunchEvent = {
               time: h.peakExtT,
@@ -559,7 +548,6 @@ export class BoxingAnalyzer {
     h.peakSpeed = h.speedMs;
     h.peakInstSpeed = 0;
     h.peakRawSpeed = 0;
-    h.peakRelInst = h.relInstMs;
     h.peakElbowAngle = elbowAngle;
     h.minElbowAngle = elbowAngle;
     h.startElbowAngle = elbowAngle;

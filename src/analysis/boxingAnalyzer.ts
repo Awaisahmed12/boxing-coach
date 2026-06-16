@@ -147,9 +147,9 @@ function newHandTracker(): HandTracker {
     retractStartT: 0,
     lastPunchT: -1,
     pendingPunch: null,
-    // benefit of the doubt: a hand we haven't (yet) seen counts as guarding,
-    // matching stats(), so an occluded rear hand doesn't read HALF all round
-    guardUp: true,
+    // default DOWN: a hand we can't see or haven't confirmed at the chin
+    // shouldn't claim to be guarding (hands-down/out-of-frame must read DOWN)
+    guardUp: false,
     guardFlipFrames: 0,
     guardFrames: 0,
     activeFrames: 0,

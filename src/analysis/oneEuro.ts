@@ -52,7 +52,9 @@ class OneEuro {
 export class LandmarkSmoother {
   private fx: OneEuro[] = [];
   private fy: OneEuro[] = [];
-  constructor(minCutoff = 1.2, beta = 0.025) {
+  // higher minCutoff + beta = follows the body faster (less "stuck" feel),
+  // still smooths the small tremble when nearly still
+  constructor(minCutoff = 1.7, beta = 0.05) {
     for (let i = 0; i < 33; i++) {
       this.fx.push(new OneEuro(minCutoff, beta));
       this.fy.push(new OneEuro(minCutoff, beta));

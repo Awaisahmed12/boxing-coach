@@ -11,7 +11,7 @@ type Mode = "idle" | "loading" | "setup" | "live" | "done";
 
 const READY_FRAMES = 60; // ~2s of stable framing before the round starts
 const OUT_OF_FRAME_FRAMES = 20; // ~0.7s grace — pivoting causes brief dips
-const UI_INTERVAL_MS = 66; // ~15 Hz cap on React state updates (canvas stays 60)
+const UI_INTERVAL_MS = 40; // ~25 Hz cap on React state updates (canvas stays 60)
 // opt-in on-device diagnostics: open with ?debug
 const DEBUG = new URLSearchParams(window.location.search).has("debug");
 

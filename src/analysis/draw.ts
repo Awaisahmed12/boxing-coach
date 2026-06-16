@@ -60,15 +60,13 @@ export function drawOverlay(
     ctx.fill();
   }
 
-  // head marker
+  // head marker — a small ring centered on the nose landmark
   if (seen(LM.NOSE)) {
-    ctx.fillStyle = ACCENT;
     const nose = lm[LM.NOSE];
+    ctx.strokeStyle = ACCENT;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.moveTo(nose.x * w, nose.y * h - 26);
-    ctx.lineTo(nose.x * w - 8, nose.y * h - 40);
-    ctx.lineTo(nose.x * w + 8, nose.y * h - 40);
-    ctx.closePath();
-    ctx.fill();
+    ctx.arc(nose.x * w, nose.y * h, 6, 0, Math.PI * 2);
+    ctx.stroke();
   }
 }

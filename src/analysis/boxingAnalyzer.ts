@@ -38,6 +38,8 @@ const MAX_DEPTH_BOOST = 1.6; // cap on the foreshortening speed correction
 const JITTER_DEADBAND_N = 0.0025; // normalized units of per-frame landmark noise
 const TRACK_GAP_RESET_S = 0.5; // s — losing the pose this long resets motion state
 const MIN_VISIBILITY = 0.5; // below this the landmark is hallucinated, not seen
+const PUNCH_MIN_VIS = 0.65; // a punch needs a confidently-tracked hand, so a
+// dragged far-hand landmark can't register a phantom punch
 const GUARD_ENTER_CHIN_M = 0.42; // wrist must come within this of the chin to enter guard
 const GUARD_STAY_CHIN_M = 0.5; // and may drift out to this before guard is lost
 const GUARD_ENTER_DROP_M = 0.1; // wrist may sit this far below the shoulder line
@@ -424,6 +426,7 @@ export class BoxingAnalyzer {
 
     const startReady =
       h.armed &&
+      vis >= PUNCH_MIN_VIS && // don't start a punch on a low-confidence hand
       h.relSpeedMs > PUNCH_START_SPEED &&
       t - h.lastPunchT > PUNCH_REFRACTORY_S;
     const outward = h.extendStreak >= 2;

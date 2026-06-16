@@ -2,8 +2,11 @@ import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 
 const WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+// "full" tracks angled / partly-occluded limbs noticeably better than "lite"
+// (fewer missed far-hand punches and phantom dragged landmarks); the cost is
+// a bit of fps, which modern phones absorb.
 const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
 
 let landmarker: PoseLandmarker | null = null;
 

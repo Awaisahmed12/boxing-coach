@@ -92,7 +92,6 @@ interface HandTracker {
   rawSpeedHist: number[]; // last few raw speeds, median-filtered to despike
   peakRawSpeed: number; // peak speed from RAW positions — the displayed mph
   peakRelInst: number; // peak un-smoothed relative wrist speed — the count gate
-  peakRelSpeed: number;
   peakElbowAngle: number;
   minElbowAngle: number; // lowest elbow angle during the punch
   startElbowAngle: number; // elbow angle when the punch began
@@ -136,7 +135,6 @@ function newHandTracker(): HandTracker {
     rawSpeedHist: [],
     peakRawSpeed: 0,
     peakRelInst: 0,
-    peakRelSpeed: 0,
     peakElbowAngle: 0,
     minElbowAngle: 180,
     startElbowAngle: 0,
@@ -441,7 +439,6 @@ export class BoxingAnalyzer {
         h.peakInstSpeed = Math.max(h.peakInstSpeed, absInstSpeed);
         h.peakRawSpeed = Math.max(h.peakRawSpeed, rawInstSpeed);
         h.peakRelInst = Math.max(h.peakRelInst, h.relInstMs);
-        h.peakRelSpeed = Math.max(h.peakRelSpeed, h.relSpeedMs);
         h.peakElbowAngle = Math.max(h.peakElbowAngle, elbowAngle);
         h.minElbowAngle = Math.min(h.minElbowAngle, elbowAngle);
         if (h.startElbowPos) {
@@ -552,7 +549,6 @@ export class BoxingAnalyzer {
     h.peakInstSpeed = 0;
     h.peakRawSpeed = 0;
     h.peakRelInst = h.relInstMs;
-    h.peakRelSpeed = h.relSpeedMs;
     h.peakElbowAngle = elbowAngle;
     h.minElbowAngle = elbowAngle;
     h.startElbowAngle = elbowAngle;

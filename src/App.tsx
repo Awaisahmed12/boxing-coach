@@ -11,6 +11,9 @@ type Mode = "idle" | "loading" | "setup" | "live" | "done";
 
 const READY_FRAMES = 60; // ~2s of stable framing before the round starts
 const OUT_OF_FRAME_FRAMES = 20; // ~0.7s grace — pivoting causes brief dips
+const UI_INTERVAL_MS = 66; // ~15 Hz cap on React state updates (canvas stays 60)
+// opt-in on-device diagnostics: open with ?debug
+const DEBUG = new URLSearchParams(window.location.search).has("debug");
 
 // audible cue so the round start is clear even when the phone is propped up
 // with the rear camera and the screen can't be seen
@@ -119,6 +122,7 @@ export default function App() {
     let badFrames = 0;
     let prevFrameS = -1; // for measured processing fps
     let fpsEma = 0;
+    let lastUiMs = -1; // throttle React updates; the canvas still draws every frame
 
     // timeS is a monotonic wall-clock time (seconds). We deliberately do NOT
     // use the video's currentTime / rVFC mediaTime as the clock: on a live
@@ -149,21 +153,9 @@ export default function App() {
         return; // drop the frame — one bad detect must not kill the session
       }
 
-      // temporary on-device diagnostic
-      if (prevFrameS >= 0 && timeS > prevFrameS) {
-        const inst = 1 / (timeS - prevFrameS);
-        fpsEma = fpsEma > 0 ? 0.9 * fpsEma + 0.1 * inst : inst;
-      }
-      prevFrameS = timeS;
-      const nose = lm?.[0];
-      setDbg(
-        `cam ${camInfoRef.current} ~${fpsEma.toFixed(0)}fps pose ${poseCount} ` +
-          (nose ? `nose ${nose.x.toFixed(2)},${nose.y.toFixed(2)}` : "no-lm")
-      );
-
       const status = assessFraming(lm);
       if (!sessionStarted) {
-        // setup phase: wait for stable full-body framing, then auto-start
+        // setup phase: wait for stable framing, then auto-start
         readyFrames = status.ok ? readyFrames + 1 : 0;
         setFraming(status);
         setCountdownS(
@@ -185,14 +177,35 @@ export default function App() {
         setOutOfFrame(badFrames >= OUT_OF_FRAME_FRAMES);
       }
 
-      setMetrics(m);
-
+      // the canvas overlay tracks every frame for a smooth skeleton...
       if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
         canvas.width = video.clientWidth;
         canvas.height = video.clientHeight;
       }
       const ctx = canvas.getContext("2d");
       if (ctx) drawOverlay(ctx, m, canvas.width, canvas.height);
+
+      // measure true processing fps every frame (cheap, no re-render)
+      if (DEBUG && prevFrameS >= 0 && timeS > prevFrameS) {
+        const inst = 1 / (timeS - prevFrameS);
+        fpsEma = fpsEma > 0 ? 0.9 * fpsEma + 0.1 * inst : inst;
+      }
+      prevFrameS = timeS;
+
+      // ...but the React stat cards only need a few updates a second, which
+      // saves real CPU/battery on phones at 60fps
+      const nowMs = timeS * 1000;
+      if (lastUiMs < 0 || nowMs - lastUiMs >= UI_INTERVAL_MS) {
+        lastUiMs = nowMs;
+        setMetrics(m);
+        if (DEBUG) {
+          const nose = lm?.[0];
+          setDbg(
+            `cam ${camInfoRef.current} ~${fpsEma.toFixed(0)}fps pose ${poseCount} ` +
+              (nose ? `nose ${nose.x.toFixed(2)},${nose.y.toFixed(2)}` : "no-lm")
+          );
+        }
+      }
 
       // refresh live coaching every 5s once there's enough data
       if (sessionStarted && m.time - lastCritiqueT > 5 && analyzer.hasData()) {

@@ -1,4 +1,5 @@
 import { MovementTracker } from "./movement";
+import { LandmarkSmoother } from "./oneEuro";
 import { LM } from "./pose";
 import type {
   FrameMetrics,
@@ -159,6 +160,8 @@ function newHandTracker(): HandTracker {
 export class BoxingAnalyzer {
   private smoothed: Point[] | null = null;
   private rawIso: Point[] | null = null; // raw landmarks in isotropic units
+  private displaySmoother = new LandmarkSmoother(); // adaptive overlay smoothing
+  private displayLm: Point[] | null = null; // width-normalized, for drawing only
   private prevTime = -1;
   private startTime = -1;
   private lastSeenT = -1;
@@ -207,6 +210,7 @@ export class BoxingAnalyzer {
         visibility: p.visibility,
       }));
       this.rawIso = null; // rebuilt below; prevRawPos cleared in resetMotion
+      this.displaySmoother.reset(); // don't smooth the overlay across the gap
       this.resetMotion();
       if (aspectChanged) {
         this.scaleSm = 0;
@@ -238,6 +242,10 @@ export class BoxingAnalyzer {
     const dt = this.prevTime >= 0 ? t - this.prevTime : 0;
     this.prevTime = t;
     this.totalFrames++;
+
+    // separate adaptive smoothing for the drawn skeleton (raw, width-
+    // normalized) — keeps the figure stable without affecting detection
+    this.displayLm = this.displaySmoother.smooth(raw, dt);
 
     const shoulderW = dist(lm[LM.L_SHOULDER], lm[LM.R_SHOULDER]);
     // px→m scale: a bladed stance foreshortens the shoulders, a crouch the
@@ -624,8 +632,8 @@ export class BoxingAnalyzer {
     const R = this.hands.RIGHT;
     return {
       time: t,
-      // landmarks and trails go back to width-normalized x for the canvas
-      landmarks: lm ? lm.map((p) => ({ x: p.x / this.aspect, y: p.y })) : null,
+      // One-Euro-smoothed, width-normalized landmarks for a stable overlay
+      landmarks: lm ? this.displayLm : null,
       wristTrail: { left: [...L.trail], right: [...R.trail] },
       speedMph: { left: L.speedMs * MS_TO_MPH, right: R.speedMs * MS_TO_MPH },
       maxSpeedMph: this.maxSpeedMph,

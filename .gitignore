@@ -2,3 +2,7 @@ node_modules
 dist
 *.local
 .DS_Store
+.vercel
+
+# copied from node_modules by scripts/copy-wasm.mjs on install
+public/mediapipe/

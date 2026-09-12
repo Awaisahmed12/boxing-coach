@@ -1,63 +1,83 @@
-Hi, I’m Awais (@Awaisahmed12), a software engineer.
-How to reach me - ahmedawais672@gmail.com
-
----
-
 # Boxing Coach 🥊
 
-A browser-based boxing technique analyzer. Film yourself live with your phone
-camera or upload a recorded session, and get pose-tracked metrics plus
-coaching critiques — punch by punch.
+A boxing coach that watches every punch you throw. Prop up your phone (or
+upload a recorded session), shadowbox, and get scored on guard, extension,
+speed, recovery and movement — round by round, with specific fixes.
 
-All analysis runs **on your device** in the browser (MediaPipe pose tracking
-via WebAssembly). No video ever leaves your phone or laptop.
+Everything runs **on-device in the browser** (MediaPipe pose tracking via
+WebAssembly). No video ever leaves the phone; only session stats are stored,
+and only locally.
 
-## What it tracks
+## Product
 
-- **Hand speed** — live and session-max punch speed in mph, per hand
-- **Punch detection** — counts punches and classifies them as straight,
-  hook, or uppercut, with speed and elbow extension for each
-- **Guard discipline** — whether each hand stays at chin height when you're
-  not punching
-- **Joint angles** — elbow, knee, and torso tilt, updated every frame
-- **Skeleton overlay** — pose skeleton with orange wrist trails drawn over
-  your video, like a broadcast telestrator
+- **Train** — pick a drill, set rounds / round length / rest, start with the
+  camera or analyze a video. The bell rings automatically once you're in
+  frame; 10-second warning, rest timer, spoken cues ("hands up", "stay busy"),
+  live HUD with speed, punch count, guard and defensive moves, skeleton +
+  wrist-trail overlay and combo pop-ups.
+- **Session report** — 0–100 score with grade, breakdown (guard / technique /
+  output / recovery / movement), coach's notes ranked by severity, punch mix,
+  defense & footwork counts, detected combinations (1-2, 1-1-2, 1-2-3 …).
+- **History & Progress** — every session saved, charts for score, hand speed,
+  guard %, punches/min and hand-return time over time.
+- **Drills** — Shadowboxing, 1-2 Drill (free); Guard Discipline, Combination
+  Builder, Slip & Move, Speed Round (Pro). Each shifts the scoring weights.
+- **Monetization** — 7-day Pro trial on signup (no card), then Free vs Pro.
+  Free: 1 round/session, top coaching note only, last 3 sessions, 2 drills.
+  Pro ($9.99/mo or $59.99/yr): everything.
 
-## The critiques
+## How the tracking works
 
-After (and during) a session, a rule-based coach reviews your stats and tells
-you things like:
-
-- "Your right hand was in guard only 48% of the time — keep it glued to your cheek"
-- "Straight punches averaged 152° at the elbow — turn the shoulder over and extend"
-- "Slow hand return (520ms avg) — snap it back on the same line"
-- "All straight punches — mix in hooks and uppercuts"
-- "Static head — slip or change levels after you punch"
+- MediaPipe Pose Landmarker (full model, up to 3 poses) with a subject lock
+  that keeps tracking the boxer if someone walks past. Framing only needs
+  head + shoulders, so seated / close-up / tight rooms all work.
+- Landmarks are smoothed in isotropic units (a One Euro filter for the drawn
+  skeleton, an EMA for detection). Pixel→meter scale comes from shoulder
+  width (and torso length when hips are visible), smoothed so body rotation
+  doesn't modulate speeds.
+- Each hand runs a GUARD → EXTENDING → RETRACTING state machine on
+  shoulder-relative wrist motion. A punch counts when the arm works through a
+  real range of motion (elbow swing or elbow travel) **and** the wrist reaches
+  out a real distance — no speed requirement, so slow practice punches
+  register. Speed is read from raw positions with a depth (foreshortening)
+  correction and a 3-frame median to kill spikes.
+- Shape (straight / hook / uppercut) comes from elbow angle and path; the
+  boxer's stance turns that into jab / cross / lead hook / rear uppercut …
+  Combos are runs of punches ≤ 0.75 s apart, in punch-number notation.
+- Guard uses hysteresis + debounce (tighter to enter than to keep) so it
+  doesn't flicker, and is judged only while the hand isn't punching.
+- Head defense (slip / duck / roll) is measured relative to the hips so
+  footwork doesn't read as a slip; steps and pivots come from the ankles.
+- Scoring (`src/analysis/score.ts`) ramps each component between "clearly
+  bad" and "clearly good" values; drills reweight the components.
 
 ## Running it
 
 ```bash
-npm install
+npm install     # also copies the MediaPipe WASM runtime into public/
 npm run dev
 ```
 
-Open the printed URL on your phone or laptop. For live filming on a phone the
-page must be served over HTTPS (or localhost) for camera access.
+Camera access needs HTTPS or localhost. `npm run build` produces a static
+`dist/` — deploy anywhere (Vercel config included). Add `?debug` to the URL
+for an on-screen camera / fps / pose readout.
 
-```bash
-npm run build   # production build in dist/
-```
+### Environment variables (optional)
+
+| Variable | Purpose |
+|---|---|
+| `VITE_STRIPE_MONTHLY_URL` | Stripe Payment Link for the monthly plan |
+| `VITE_STRIPE_YEARLY_URL` | Stripe Payment Link for the yearly plan |
+| `VITE_LICENSE_KEYS` | Comma-separated keys that unlock Pro (launch stopgap until there's a backend) |
 
 ## Filming tips
 
-- Film from the side or at a 45° angle
-- Keep your **full body** in frame, feet included
-- Good lighting and a plain background improve tracking accuracy
+Phone anywhere with your head and shoulders in view; side-on or 45° reads
+punches and slips best. Step back to include your feet if you want footwork
+tracked. Decent light, plain background.
 
-## Tech
+## Stack
 
-- React + TypeScript + Vite
-- [MediaPipe Pose Landmarker](https://developers.google.com/mediapipe/solutions/vision/pose_landmarker)
-  (lite model, GPU-delegated, loaded at runtime)
-- Punch detection is a per-hand state machine over smoothed wrist velocity,
-  reach, and elbow angle; speeds are scaled to meters using shoulder width
+React 18 · TypeScript · Vite · `@mediapipe/tasks-vision` · Vercel Analytics.
+No backend, no external runtime dependencies — the pose model and WASM are
+served with the app.

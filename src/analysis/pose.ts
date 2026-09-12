@@ -1,27 +1,46 @@
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 
-const WASM_URL =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+// Both the WASM runtime (copied from node_modules at install by
+// scripts/copy-wasm.mjs) and the model are served with the app, so nothing
+// depends on a third-party CDN at runtime.
+const asset = (p: string) => new URL(import.meta.env.BASE_URL + p, document.baseURI).href;
+const WASM_URL = asset("mediapipe/wasm");
 // "full" tracks angled / partly-occluded limbs noticeably better than "lite"
 // (fewer missed far-hand punches and phantom dragged landmarks); the cost is
 // a bit of fps, which modern phones absorb.
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
+const MODEL_URL = asset("models/pose_landmarker_full.task");
 
 let landmarker: PoseLandmarker | null = null;
+let pending: Promise<PoseLandmarker> | null = null;
 
-export async function getPoseLandmarker(): Promise<PoseLandmarker> {
-  if (landmarker) return landmarker;
+async function create(delegate: "GPU" | "CPU") {
   const vision = await FilesetResolver.forVisionTasks(WASM_URL);
-  landmarker = await PoseLandmarker.createFromOptions(vision, {
-    baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+  return PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
     runningMode: "VIDEO",
     numPoses: 3, // detect bystanders too so we can lock onto the boxer
     minPoseDetectionConfidence: 0.5,
     minPosePresenceConfidence: 0.5,
     minTrackingConfidence: 0.5,
   });
-  return landmarker;
+}
+
+export function getPoseLandmarker(): Promise<PoseLandmarker> {
+  if (landmarker) return Promise.resolve(landmarker);
+  if (pending) return pending;
+  pending = (async () => {
+    try {
+      landmarker = await create("GPU");
+    } catch {
+      // WebGL delegate is unavailable on some phones/browsers; CPU is slower but works
+      landmarker = await create("CPU");
+    }
+    return landmarker;
+  })().catch((e) => {
+    pending = null; // let a later attempt retry after e.g. a network failure
+    throw e;
+  });
+  return pending;
 }
 
 // MediaPipe pose landmark indices used by the analyzer

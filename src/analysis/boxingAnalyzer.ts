@@ -1,14 +1,17 @@
 import { MovementTracker } from "./movement";
 import { LandmarkSmoother } from "./oneEuro";
 import { LM } from "./pose";
-import type {
-  FrameMetrics,
-  Hand,
-  MoveEvent,
-  Point,
-  PunchEvent,
-  PunchType,
-  SessionStats,
+import {
+  namepunch,
+  PUNCH_NUMBER,
+  type FrameMetrics,
+  type Hand,
+  type MoveEvent,
+  type Point,
+  type PunchEvent,
+  type PunchShape,
+  type SessionStats,
+  type Stance,
 } from "./types";
 
 const SHOULDER_WIDTH_M = 0.41; // assumed adult biacromial width
@@ -47,6 +50,8 @@ const GUARD_ENTER_EXT_M = 0.45; // arm compactness: long guard passes, a punch d
 const GUARD_STAY_EXT_M = 0.52;
 const GUARD_DEBOUNCE_FRAMES = 2;
 const TRAIL_LEN = 14;
+const COMBO_GAP_S = 0.75; // punches closer than this chain into one combination
+const RECENT_WINDOW_S = 8; // window for the live "hands up" cue
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -177,15 +182,33 @@ export class BoxingAnalyzer {
   private noseSamples: Point[] = [];
   private stanceRatios: number[] = [];
   private totalFrames = 0;
+  private stance: Stance;
+  private currentRound = 1;
+  private activeS = 0; // seconds of round time, rest excluded
+  private wasActive = true;
+  private comboBuf: PunchEvent[] = [];
+  private combos: Record<string, number> = {};
+  private lastCombo: string | null = null;
+  private recentGuard: { t: number; up: boolean }[] = [];
+
+  constructor(stance: Stance = "orthodox") {
+    this.stance = stance;
+  }
+
+  setRound(n: number) {
+    this.currentRound = n;
+  }
 
   /**
-   * Feed one frame of normalized landmarks. timeS is the video's media time
-   * in seconds; aspect is videoWidth/videoHeight, needed because normalized
-   * x is in image-width units and y in image-height units.
+   * Feed one frame of normalized landmarks. timeS is a monotonic clock in
+   * seconds; aspect is videoWidth/videoHeight, needed because normalized x is
+   * in image-width units and y in image-height units. With active=false (rest
+   * between rounds) the overlay keeps tracking but nothing is scored.
    */
-  update(raw: Point[] | null, timeS: number, aspect = 1): FrameMetrics {
+  update(raw: Point[] | null, timeS: number, aspect = 1, active = true): FrameMetrics {
     if (this.startTime < 0) this.startTime = timeS;
     const t = timeS - this.startTime;
+    this.expireCombo(t);
 
     if (!raw || raw.length < 33) {
       // don't advance prevTime: dt must span back to the last real sample so
@@ -243,6 +266,19 @@ export class BoxingAnalyzer {
     // separate adaptive smoothing for the drawn skeleton (raw, width-
     // normalized) — keeps the figure stable without affecting detection
     this.displayLm = this.displaySmoother.smooth(raw, dt);
+
+    // rest period: draw, but don't score — and come back with clean motion
+    // state so the first frames of the next round can't read as a punch
+    if (!active) {
+      if (this.wasActive) this.resetMotion();
+      this.wasActive = false;
+      return this.frameMetrics(t, lm);
+    }
+    if (!this.wasActive) {
+      this.resetMotion();
+      this.wasActive = true;
+    }
+    if (dt > 0 && dt < 0.5) this.activeS += dt;
 
     const shoulderW = dist(lm[LM.L_SHOULDER], lm[LM.R_SHOULDER]);
     // px→m scale: a bladed stance foreshortens the shoulders, a crouch the
@@ -431,6 +467,10 @@ export class BoxingAnalyzer {
         // guard discipline is only judged while the hand is not punching
         if (h.guardUp) h.guardFrames++;
         h.activeFrames++;
+        this.recentGuard.push({ t, up: h.guardUp });
+        while (this.recentGuard.length && t - this.recentGuard[0].t > RECENT_WINDOW_S) {
+          this.recentGuard.shift();
+        }
         if (startReady && (outward || arcing)) {
           this.beginPunch(h, extension, elbowAngle, elbow, t);
         }
@@ -477,8 +517,9 @@ export class BoxingAnalyzer {
           if (counts) {
             const punch: PunchEvent = {
               time: h.peakExtT,
+              round: this.currentRound,
               hand,
-              type: this.classify(hand, lm, h.peakElbowAngle),
+              type: namepunch(this.classify(hand, lm, h.peakElbowAngle), hand, this.stance),
               // measured from raw positions: the smoothed peaks lag fast
               // motion and roughly halve the reading
               speedMph:
@@ -492,6 +533,7 @@ export class BoxingAnalyzer {
             this.lastPunch = punch;
             this.lastMove = { time: punch.time, type: punch.type, hand };
             this.maxSpeedMph = Math.max(this.maxSpeedMph, punch.speedMph);
+            this.pushCombo(punch);
             h.pendingPunch = punch;
             // measure retraction (and the next punch's refractory) from the
             // moment the punch landed, not from when the stall was detected
@@ -595,7 +637,29 @@ export class BoxingAnalyzer {
     }
   }
 
-  private classify(hand: Hand, lm: Point[], peakElbowAngle: number): PunchType {
+  // combinations: punches that land within COMBO_GAP_S of each other chain
+  // into one combo, recorded in punch-number notation ("1-2", "1-1-2")
+  private pushCombo(p: PunchEvent) {
+    const last = this.comboBuf[this.comboBuf.length - 1];
+    if (last && p.time - last.time > COMBO_GAP_S) this.flushCombo();
+    this.comboBuf.push(p);
+  }
+
+  private expireCombo(t: number) {
+    const last = this.comboBuf[this.comboBuf.length - 1];
+    if (last && t - last.time > COMBO_GAP_S) this.flushCombo();
+  }
+
+  private flushCombo() {
+    if (this.comboBuf.length >= 2) {
+      const key = this.comboBuf.map((p) => PUNCH_NUMBER[p.type]).join("-");
+      this.combos[key] = (this.combos[key] ?? 0) + 1;
+      this.lastCombo = key;
+    }
+    this.comboBuf = [];
+  }
+
+  private classify(hand: Hand, lm: Point[], peakElbowAngle: number): PunchShape {
     const wrist = lm[hand === "LEFT" ? LM.L_WRIST : LM.R_WRIST];
     const shoulder = lm[hand === "LEFT" ? LM.L_SHOULDER : LM.R_SHOULDER];
     // y grows downward in image space: a wrist rising from below with a bent
@@ -644,8 +708,13 @@ export class BoxingAnalyzer {
       guardUp: { left: L.guardUp, right: R.guardUp },
       punchCount: this.punches.length,
       lastPunch: this.lastPunch,
+      lastCombo: this.lastCombo,
       moveCounts: { ...this.movement.counts },
       lastMove: this.lastMove,
+      recentGuardRatio: this.recentGuard.length
+        ? this.recentGuard.filter((r) => r.up).length / this.recentGuard.length
+        : 0,
+      secondsSinceLastPunch: this.lastPunch ? t - this.lastPunch.time : t,
     };
   }
 
@@ -664,6 +733,7 @@ export class BoxingAnalyzer {
   }
 
   stats(): SessionStats {
+    this.flushCombo();
     const guardRatio = (h: HandTracker) =>
       h.activeFrames > 0 ? h.guardFrames / h.activeFrames : 1;
     let headMovement = 0;
@@ -685,6 +755,7 @@ export class BoxingAnalyzer {
       : 0;
     return {
       durationS: Math.max(this.prevTime, 0),
+      activeS: this.activeS,
       punches: [...this.punches],
       guardUpRatio: {
         left: guardRatio(this.hands.LEFT),
@@ -694,6 +765,7 @@ export class BoxingAnalyzer {
       stanceWidthRatio,
       maxSpeedMph: this.maxSpeedMph,
       moveCounts: { ...this.movement.counts },
+      combos: { ...this.combos },
     };
   }
 
